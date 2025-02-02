@@ -1,0 +1,23 @@
+2025-01-26 01:35:49,189 INFO    MainThread:254632 [wandb_setup.py:_flush():68] Current SDK version is 0.19.1
+2025-01-26 01:35:49,190 INFO    MainThread:254632 [wandb_setup.py:_flush():68] Configure stats pid to 254632
+2025-01-26 01:35:49,191 INFO    MainThread:254632 [wandb_setup.py:_flush():68] Loading settings from /home/daniel/.config/wandb/settings
+2025-01-26 01:35:49,193 INFO    MainThread:254632 [wandb_setup.py:_flush():68] Loading settings from /mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/wandb/settings
+2025-01-26 01:35:49,194 INFO    MainThread:254632 [wandb_setup.py:_flush():68] Loading settings from environment variables
+2025-01-26 01:35:49,196 INFO    MainThread:254632 [wandb_init.py:_log_setup():528] Logging user logs to /mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/wandb/run-20250126_013549-mzvfbi64/logs/debug.log
+2025-01-26 01:35:49,198 INFO    MainThread:254632 [wandb_init.py:_log_setup():529] Logging internal logs to /mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/wandb/run-20250126_013549-mzvfbi64/logs/debug-internal.log
+2025-01-26 01:35:49,200 INFO    MainThread:254632 [wandb_init.py:init():644] calling init triggers
+2025-01-26 01:35:49,201 INFO    MainThread:254632 [wandb_init.py:init():650] wandb.init called with sweep_config: {}
+config: {'PROBLEM_FILE': 'minigrid/consolidated.npz', 'LR': 0.00025, 'NUM_ENVS': 4, 'NUM_STEPS': 128, 'TOTAL_TIMESTEPS': 500000.0, 'UPDATE_EPOCHS': 4, 'NUM_MINIBATCHES': 4, 'GAMMA': 0.99, 'GAE_LAMBDA': 0.95, 'CLIP_EPS': 0.2, 'ENT_COEF': 0.01, 'VF_COEF': 0.5, 'MAX_GRAD_NORM': 0.5, 'ACTIVATION': 'tanh', 'ANNEAL_LR': True}
+2025-01-26 01:35:49,202 INFO    MainThread:254632 [wandb_init.py:init():680] starting backend
+2025-01-26 01:35:49,203 INFO    MainThread:254632 [wandb_init.py:init():684] sending inform_init request
+2025-01-26 01:35:49,236 INFO    MainThread:254632 [backend.py:_multiprocessing_setup():104] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-01-26 01:35:49,238 INFO    MainThread:254632 [wandb_init.py:init():697] backend started and connected
+2025-01-26 01:35:49,244 INFO    MainThread:254632 [wandb_init.py:init():790] updated telemetry
+2025-01-26 01:35:49,274 INFO    MainThread:254632 [wandb_init.py:init():822] communicating run to backend with 90.0 second timeout
+2025-01-26 01:35:50,667 INFO    MainThread:254632 [wandb_init.py:init():874] starting run threads in backend
+2025-01-26 01:35:50,880 INFO    MainThread:254632 [wandb_run.py:_console_start():2374] atexit reg
+2025-01-26 01:35:50,881 INFO    MainThread:254632 [wandb_run.py:_redirect():2224] redirect: wrap_raw
+2025-01-26 01:35:50,882 INFO    MainThread:254632 [wandb_run.py:_redirect():2289] Wrapping output streams.
+2025-01-26 01:35:50,882 INFO    MainThread:254632 [wandb_run.py:_redirect():2314] Redirects installed.
+2025-01-26 01:35:50,885 INFO    MainThread:254632 [wandb_init.py:init():916] run started, returning control to user process
+2025-01-26 01:35:51,204 WARNING MsgRouterThr:254632 [router.py:message_loop():75] message_loop has been closed

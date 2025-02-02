@@ -1,0 +1,15 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/ppo.py", line 308, in <module>
+    out = jax.block_until_ready(train_jit(rng))
+  File "/mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/ppo.py", line 94, in train
+    network_params = network.init(init_rng, init_obs)
+  File "/mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/ppo.py", line 34, in __call__
+    actor_mean = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+  File "/home/daniel/miniconda3/envs/JAXmdp/lib/python3.9/site-packages/flax/linen/linear.py", line 259, in __call__
+    (jnp.shape(inputs)[-1], self.features),
+IndexError: tuple index out of range

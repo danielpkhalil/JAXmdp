@@ -1,0 +1,11 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/ppo.py", line 308, in <module>
+    out = jax.block_until_ready(train_jit(rng))
+  File "/mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/ppo.py", line 91, in train
+    network = ActorCritic(env.action_space(env_params).n, activation=config["ACTIVATION"])
+TypeError: 'Discrete' object is not callable

@@ -1,0 +1,16 @@
+{"time":"2025-01-26T01:35:49.250049557-08:00","level":"INFO","msg":"using version","core version":"0.19.1"}
+{"time":"2025-01-26T01:35:49.250740487-08:00","level":"INFO","msg":"created symlink","path":"/mnt/c/Users/danie/PycharmProjects/JAXmdp/version3/wandb/run-20250126_013549-mzvfbi64/logs/debug-core.log"}
+{"time":"2025-01-26T01:35:50.307740445-08:00","level":"INFO","msg":"created new stream","id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:50.308726797-08:00","level":"INFO","msg":"stream: started","id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:50.311416815-08:00","level":"INFO","msg":"sender: started","stream_id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:50.311532735-08:00","level":"INFO","msg":"handler: started","stream_id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:50.311548795-08:00","level":"INFO","msg":"writer: Do: started","stream_id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:50.708438793-08:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-01-26T01:35:51.203915162-08:00","level":"INFO","msg":"stream: closing","id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:51.204183889-08:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-01-26T01:35:51.205726815-08:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-01-26T01:35:51.679173064-08:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-01-26T01:35:51.808885795-08:00","level":"INFO","msg":"handler: closed","stream_id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:51.808925258-08:00","level":"INFO","msg":"writer: Close: closed","stream_id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:51.8090276-08:00","level":"INFO","msg":"sender: closed","stream_id":"mzvfbi64"}
+{"time":"2025-01-26T01:35:51.810794775-08:00","level":"INFO","msg":"stream: closed","id":"mzvfbi64"}
