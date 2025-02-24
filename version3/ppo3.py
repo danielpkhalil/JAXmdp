@@ -222,7 +222,7 @@ if __name__ == "__main__":
         "LR": 2.5e-4,
         "NUM_ENVS": 1,  # 4
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 5e2,
+        "TOTAL_TIMESTEPS": 5e3,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 1,  # 4
         "GAMMA": 0.99,
