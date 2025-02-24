@@ -29,7 +29,7 @@ class ActorCritic(nn.Module):
             x = x.reshape((x.shape[0], -1))
         activation_fn = nn.relu if self.activation == "relu" else nn.tanh
 
-        # Actor network
+        # Actor network.
         actor_hidden = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         actor_hidden = activation_fn(actor_hidden)
         actor_hidden = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor_hidden)
@@ -37,7 +37,7 @@ class ActorCritic(nn.Module):
         logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_hidden)
         pi = distrax.Categorical(logits=logits)
 
-        # Critic network
+        # Critic network.
         critic_hidden = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         critic_hidden = activation_fn(critic_hidden)
         critic_hidden = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(critic_hidden)
@@ -60,20 +60,11 @@ class Transition(NamedTuple):
     info: Any
 
 # ------------------------------------------------------------------------------
-# One update step (jitted)
+# One update step (jitted) that rolls out trajectories and applies PPO updates.
 # ------------------------------------------------------------------------------
 def update_step(runner_state, config, network, env, env_params):
-    """
-    Performs one PPO update step:
-      - Rollout for NUM_STEPS timesteps.
-      - Compute advantages.
-      - Run UPDATE_EPOCHS of PPO updates.
-    Returns the updated runner_state and the collected metric.
-    """
-    # Unpack runner_state
     train_state, env_state, last_obs, rng = runner_state
 
-    # Rollout (using a Python loop via lax.scan inside the jitted update)
     def env_step(runner_state, _):
         train_state, env_state, last_obs, rng = runner_state
         rng, _rng = jax.random.split(rng)
@@ -93,7 +84,7 @@ def update_step(runner_state, config, network, env, env_params):
     train_state, env_state, last_obs, rng = runner_state
     _, last_val = network.apply(train_state.params, last_obs)
 
-    # Compute advantages using GAE.
+    # Compute advantages via Generalized Advantage Estimation.
     def calc_gae(traj_batch, last_val):
         def gae_scan(carry, transition):
             gae, next_value = carry
@@ -114,9 +105,7 @@ def update_step(runner_state, config, network, env, env_params):
             def loss_fn(params, traj_batch, gae, targets):
                 pi, value = network.apply(params, traj_batch.obs)
                 log_prob = pi.log_prob(traj_batch.action)
-                value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(
-                    -config["CLIP_EPS"], config["CLIP_EPS"]
-                )
+                value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
                 v_loss1 = jnp.square(value - targets)
                 v_loss2 = jnp.square(value_pred_clipped - targets)
                 value_loss = 0.5 * jnp.maximum(v_loss1, v_loss2).mean()
@@ -149,8 +138,7 @@ def update_step(runner_state, config, network, env, env_params):
     update_state = (train_state, traj_batch, advantages, targets, rng)
     update_state, loss_info = jax.lax.scan(update_epoch, update_state, None, config["UPDATE_EPOCHS"])
     train_state = update_state[0]
-    # (Here, metric can be extended to include more info.)
-    metric = traj_batch.info
+    metric = traj_batch.info  # You may extend this to include more metrics.
     new_runner_state = (train_state, env_state, last_obs, rng)
     return new_runner_state, metric
 
@@ -158,17 +146,15 @@ def update_step(runner_state, config, network, env, env_params):
 # Evaluation function (deterministic policy)
 # ------------------------------------------------------------------------------
 def evaluate_policy(train_state, env, env_params, network, num_envs, obs_shape):
-    # Use a fixed random key for evaluation
     rng = jax.random.PRNGKey(0)
     reset_rng = jax.random.split(rng, num_envs)
     obs, env_state = jax.vmap(env.reset_env, in_axes=(0, None))(reset_rng, env_params)
     done = jnp.zeros(num_envs, dtype=bool)
     total_reward = 0.0
     steps = 0
-    # Run until all envs are done.
     while not jnp.all(done):
-        # Deterministic action: choose argmax of probabilities.
         pi, _ = network.apply(train_state.params, obs)
+        # Deterministic: choose action with highest probability.
         action = jnp.argmax(pi.probs, axis=-1)
         rng, _ = jax.random.split(rng)
         rng_step = jax.random.split(rng, num_envs)
@@ -180,7 +166,7 @@ def evaluate_policy(train_state, env, env_params, network, num_envs, obs_shape):
     return float(total_reward), steps
 
 # ------------------------------------------------------------------------------
-# Main training loop (Python loop for evaluation interleaving)
+# Main training loop (unrolled in Python to allow evaluation every eval_freq steps)
 # ------------------------------------------------------------------------------
 def train_loop(config, rng, network, env, env_params, obs_shape):
     # Initialize network parameters, optimizer, and environment.
@@ -198,32 +184,30 @@ def train_loop(config, rng, network, env, env_params, obs_shape):
             optax.adam(config["LR"], eps=1e-5)
         )
     train_state = TrainState.create(apply_fn=network.apply, params=network_params, tx=tx)
-    # Initialize environment.
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
     obsv, env_state = jax.vmap(env.reset_env, in_axes=(0, None))(reset_rng, env_params)
     runner_state = (train_state, env_state, obsv, rng)
 
     global_steps = 0
-    T_PPO_SB3 = None  # To record when optimal reward is first reached.
+    T_PPO_SB3 = None  # Step when optimal reward first reached.
     eval_results = []
 
-    # jit the update_step function.
+    # JIT the update step.
     update_step_jit = jax.jit(lambda rs: update_step(rs, config, network, env, env_params))
 
     for update in range(config["NUM_UPDATES"]):
         runner_state, metric = update_step_jit(runner_state)
         global_steps += config["NUM_STEPS"]
-        # Every eval_freq timesteps, run an evaluation episode.
+        # Evaluate every eval_freq timesteps.
         if global_steps % config["eval_freq"] < config["NUM_STEPS"]:
             eval_reward, eval_steps = evaluate_policy(runner_state[0], env, env_params, network, config["NUM_ENVS"], obs_shape)
             wandb.log({"eval_reward": eval_reward, "global_steps": global_steps})
             eval_results.append((global_steps, eval_reward))
-            # If evaluation reward meets or exceeds the optimal value and we haven't set T_PPO_SB3, record it.
             if eval_reward >= config["J_opt"] and T_PPO_SB3 is None:
                 T_PPO_SB3 = global_steps
                 wandb.run.summary["T_PPO_SB3"] = T_PPO_SB3
-    # At the end, run one final evaluation.
+    # Final evaluation.
     final_eval_reward, _ = evaluate_policy(runner_state[0], env, env_params, network, config["NUM_ENVS"], obs_shape)
     wandb.log({"final_eval_reward": final_eval_reward, "global_steps": global_steps})
     wandb.run.summary["J_PPO_SB3"] = final_eval_reward
@@ -233,13 +217,14 @@ def train_loop(config, rng, network, env, env_params, obs_shape):
 # Main entry point with WandB initialization
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Base configuration.
     config = {
         "LR": 2.5e-4,
-        "NUM_ENVS": 1,         # Adjust as needed (e.g., 4)
+        "NUM_ENVS": 1,            # Adjust as needed (e.g., 4)
         "NUM_STEPS": 128,
         "TOTAL_TIMESTEPS": 5e5,
         "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 1,  # Adjust as needed (e.g., 4)
+        "NUM_MINIBATCHES": 1,      # Adjust as needed (e.g., 4)
         "GAMMA": 0.99,
         "GAE_LAMBDA": 0.95,
         "CLIP_EPS": 0.2,
@@ -248,20 +233,25 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
         "ANNEAL_LR": True,
-        # Additional keys for evaluation:
-        "eval_freq": 1000,     # Evaluate every 1000 timesteps.
-        "J_opt": 200.0,        # Optimal reward threshold (set as appropriate).
+        # Evaluation settings.
+        "eval_freq": 1000,         # Evaluate every 1000 timesteps.
+        "J_opt": 200.0,            # Optimal reward threshold.
     }
+    # Compute derived configuration values.
+    config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"])
+    config["MINIBATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
+
+    # Initialize wandb.
     wandb.init(project="MyTabularPPOProject", config=config)
-    rng = jax.random.PRNGKey(30)
-    # Create the environment.
+
+    # Create environment and network.
     env = create_tabular_env("consolidated.npz")
     env = LogWrapper(env)
     env_params = env.default_params
     obs_shape = env.observation_space(env_params).shape
-    # Create the network.
     network = ActorCritic(action_dim=env.action_space(env_params).n, activation=config["ACTIVATION"])
-    # Run the training loop.
+
+    rng = jax.random.PRNGKey(30)
     eval_results = train_loop(config, rng, network, env, env_params, obs_shape)
     print("Training finished.")
     print("Evaluation results (global_steps, eval_reward):")
