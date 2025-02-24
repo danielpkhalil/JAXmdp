@@ -7,7 +7,9 @@ from flax.linen.initializers import constant, orthogonal
 from typing import NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
-from jax.experimental import host_callback as hcb  # <-- Added for terminal printing
+from jax.experimental import host_callback as hcb
+
+import wandb  # <-- WandB for logging
 
 # Import your custom TabularEnv creation function and wrappers
 from gymnax_env import create_tabular_env
@@ -76,7 +78,7 @@ class Transition(NamedTuple):
     info: Any
 
 # ------------------------------------------------------------------------------
-# PPO Training Function
+# PPO Training Function with WandB logging via host callbacks
 # ------------------------------------------------------------------------------
 def make_train(config):
     # Derived configurations
@@ -110,7 +112,6 @@ def make_train(config):
         # --- Initialize the network ---
         network = ActorCritic(action_dim=action_dim, activation=config["ACTIVATION"])
         rng, _rng = jax.random.split(rng)
-        # For Box observations (screens), initialize with the correct shape.
         init_x = jnp.zeros((config["NUM_ENVS"],) + obs_shape, dtype=jnp.uint8)
         network_params = network.init(_rng, init_x)
 
@@ -140,14 +141,10 @@ def make_train(config):
             # Collect trajectories over NUM_STEPS time steps.
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, rng = runner_state
-
-                # Select action using the current policy.
                 rng, _rng = jax.random.split(rng)
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
-
-                # Step the environment.
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
                 obsv, env_state, reward, done, info = jax.vmap(
@@ -165,7 +162,7 @@ def make_train(config):
             train_state, env_state, last_obs, rng = runner_state
             _, last_val = network.apply(train_state.params, last_obs)
 
-            # Compute advantages using Generalized Advantage Estimation (GAE).
+            # Compute advantages using GAE.
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
                     gae, next_value = gae_and_next_value
@@ -237,8 +234,8 @@ def make_train(config):
                     _update_minbatch, train_state, minibatches
                 )
                 update_state = (train_state, traj_batch, gae, targets, rng)
-                # <-- Added terminal print for epoch loss
-                hcb.id_print(total_loss, what="Epoch Loss:")
+                # Log epoch loss to wandb via host callback.
+                hcb.id_tap(lambda x, _: wandb.log({"epoch_loss": float(x)}), total_loss)
                 return update_state, total_loss
 
             update_state = (train_state, traj_batch, advantages, targets, rng)
@@ -246,11 +243,11 @@ def make_train(config):
                 _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
             )
             train_state = update_state[0]
-            metric = traj_batch.info  # You can extract further metrics here.
+            metric = traj_batch.info  # Extract further metrics if desired.
             rng = update_state[-1]
             runner_state = (train_state, env_state, last_obs, rng)
-            # <-- Added terminal print for update metrics
-            hcb.id_print(metric, what="Update Metrics:")
+            # Log update metrics to wandb.
+            hcb.id_tap(lambda m, _: wandb.log({"update_metric": m}), metric)
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
@@ -261,7 +258,7 @@ def make_train(config):
     return train
 
 # ------------------------------------------------------------------------------
-# Main entry point
+# Main entry point with WandB initialization
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     config = {
@@ -281,6 +278,9 @@ if __name__ == "__main__":
         "ANNEAL_LR": True,
         "DEBUG": True,
     }
+
+    # Initialize wandb and set the configuration.
+    wandb.init(project="MyTabularPPOProject", config=config)
 
     rng = jax.random.PRNGKey(30)
     train_fn = make_train(config)
