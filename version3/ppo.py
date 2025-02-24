@@ -1,3 +1,4 @@
+import argparse
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -138,7 +139,7 @@ def update_step(runner_state, config, network, env, env_params):
     update_state = (train_state, traj_batch, advantages, targets, rng)
     update_state, loss_info = jax.lax.scan(update_epoch, update_state, None, config["UPDATE_EPOCHS"])
     train_state = update_state[0]
-    metric = traj_batch.info  # You may extend this to include more metrics.
+    metric = traj_batch.info  # Extend to include more metrics if desired.
     new_runner_state = (train_state, env_state, last_obs, rng)
     return new_runner_state, metric
 
@@ -154,7 +155,7 @@ def evaluate_policy(train_state, env, env_params, network, num_envs, obs_shape):
     steps = 0
     while not jnp.all(done):
         pi, _ = network.apply(train_state.params, obs)
-        # Deterministic: choose action with highest probability.
+        # Deterministic action: choose argmax.
         action = jnp.argmax(pi.probs, axis=-1)
         rng, _ = jax.random.split(rng)
         rng_step = jax.random.split(rng, num_envs)
@@ -166,7 +167,7 @@ def evaluate_policy(train_state, env, env_params, network, num_envs, obs_shape):
     return float(total_reward), steps
 
 # ------------------------------------------------------------------------------
-# Main training loop (unrolled in Python to allow evaluation every eval_freq steps)
+# Main training loop (unrolled in Python for periodic evaluation)
 # ------------------------------------------------------------------------------
 def train_loop(config, rng, network, env, env_params, obs_shape):
     # Initialize network parameters, optimizer, and environment.
@@ -190,7 +191,7 @@ def train_loop(config, rng, network, env, env_params, obs_shape):
     runner_state = (train_state, env_state, obsv, rng)
 
     global_steps = 0
-    T_PPO_SB3 = None  # Step when optimal reward first reached.
+    T_PPO_SB3 = None  # Step when optimal reward is first reached.
     eval_results = []
 
     # JIT the update step.
@@ -214,9 +215,14 @@ def train_loop(config, rng, network, env, env_params, obs_shape):
     return eval_results
 
 # ------------------------------------------------------------------------------
-# Main entry point with WandB initialization
+# Main entry point with WandB initialization and command-line arguments
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run PPO training with WandB logging.")
+    parser.add_argument("--problem_file", type=str, required=True,
+                        help="Path to the .npz file containing the MDP definition.")
+    args = parser.parse_args()
+
     # Base configuration.
     config = {
         "LR": 2.5e-4,
@@ -245,7 +251,7 @@ if __name__ == "__main__":
     wandb.init(project="MyTabularPPOProject", config=config)
 
     # Create environment and network.
-    env = create_tabular_env("consolidated.npz")
+    env = create_tabular_env(args.problem_file)
     env = LogWrapper(env)
     env_params = env.default_params
     obs_shape = env.observation_space(env_params).shape
