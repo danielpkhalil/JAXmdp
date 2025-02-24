@@ -72,7 +72,7 @@ def make_train(config):
     config["MINIBATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
 
     # Create the custom TabularEnv
-    env = create_tabular_env("consolidated.npz")
+    env = create_tabular_env("/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz")
     # If using screen observations, do NOT flatten them here so the network can process images.
     # env = FlattenObservationWrapper(env)  # Not used for image observations.
     env = LogWrapper(env)
@@ -222,7 +222,7 @@ if __name__ == "__main__":
         "LR": 2.5e-4,
         "NUM_ENVS": 1,  # 4
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 5e5,
+        "TOTAL_TIMESTEPS": 5e2,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 1,  # 4
         "GAMMA": 0.99,
