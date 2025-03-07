@@ -1,3 +1,4 @@
+# gymnax_env.py
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -6,41 +7,55 @@ from flax import struct
 import chex
 from gymnax.environments import environment, spaces
 
-
 @struct.dataclass
 class TabularState(environment.EnvState):
+    """
+    Stores the internal environment state. Must include 'time' as required by
+    the base EnvState. The rest can be arbitrary for your environment.
+    """
     state_idx: jnp.int32
     steps: jnp.int32
     done: bool
-    time: int  # Required by base EnvState
+    time: int
 
-
+# IMPORTANT: For any field that you'd like to treat as a compile-time constant
+# (e.g. booleans, horizons, etc.), set pytree_node=False. This ensures JAX
+# won't treat them as tracers, avoiding "TracerBoolConversionError".
 @struct.dataclass
 class TabularEnvParams(environment.EnvParams):
-    done_on_reward: bool = False
-    no_done_reward: float = 0.0
-    use_screen_observations: bool = True
-    horizon: int = 10000
-    max_steps_in_episode: int = 10000  # Required by the base class
+    # If these fields are used in a Python if-statement, they must be static (pytree_node=False).
+    done_on_reward: bool = struct.field(default=False, pytree_node=False)
+    no_done_reward: float = struct.field(default=0.0, pytree_node=False)
+    use_screen_observations: bool = struct.field(default=True, pytree_node=False)
+    horizon: int = struct.field(default=10000, pytree_node=False)
+    max_steps_in_episode: int = struct.field(default=10000, pytree_node=False)
 
+class TabularEnv(environment.Environment):
+    """
+    A Gymnax-compatible environment that either returns screen observations (Box(H, W, 3))
+    or 1-D Box indices [state_idx].
+    """
 
-class TabularEnv(environment.Environment):  # No generic subscript here
     def __init__(self, problem_file: str):
         super().__init__()
+        # Load transitions and rewards from .npz
         mdp = np.load(problem_file, allow_pickle=True, mmap_mode="r")
-        self.num_states, self._num_actions = mdp["transitions"].shape
 
+        # transitions: shape (num_states, num_actions)
+        # rewards: shape (num_states, num_actions)
+        self.num_states, self._num_actions = mdp["transitions"].shape
         self.transitions = jnp.array(mdp["transitions"])
         self.rewards = jnp.array(mdp["rewards"])
 
-        self.screens = mdp["screens"] if "screens" in mdp else None
-        self.screen_mapping = mdp["screen_mapping"] if "screen_mapping" in mdp else None
-        if self.screens is not None:
-            self.screens = jnp.array(self.screens)
-        if self.screen_mapping is not None:
-            self.screen_mapping = jnp.array(self.screen_mapping)
+        # Optional screen data
+        self.screens = None
+        self.screen_mapping = None
+        if "screens" in mdp:
+            self.screens = jnp.array(mdp["screens"])  # shape (n_screens, H, W, 3)
+        if "screen_mapping" in mdp:
+            self.screen_mapping = jnp.array(mdp["screen_mapping"])  # shape (num_states,)
 
-        self.TERMINAL_STATE = -1
+        self.TERMINAL_STATE = -1  # Next-state index that indicates terminal.
 
     @property
     def name(self) -> str:
@@ -51,40 +66,68 @@ class TabularEnv(environment.Environment):  # No generic subscript here
         return self._num_actions
 
     def default_params(self) -> TabularEnvParams:
+        """
+        Return the default environment parameters, which are static for JAX compilation.
+        """
         return TabularEnvParams()
 
+    # ------------
+    # SPACES
+    # ------------
     def action_space(self, params: Optional[TabularEnvParams] = None) -> spaces.Discrete:
         return spaces.Discrete(self.num_actions)
 
     def observation_space(self, params: Optional[TabularEnvParams] = None) -> spaces.Space:
+        """
+        Return a Box space if we use screen obs, else a (1,) Box for the tabular index.
+        """
         if params is None:
             params = self.default_params()
 
-        if params.use_screen_observations and self.screens is not None:
+        # If we have screen images, it will be (H, W, 3), type uint8, 0..255
+        if params.use_screen_observations and (self.screens is not None):
             return spaces.Box(
                 low=0,
                 high=255,
                 shape=self.screens.shape[1:],  # e.g. (H, W, 3)
-                dtype=jnp.uint8
+                dtype=jnp.uint8,
             )
         else:
-            return spaces.Discrete(self.num_states)
+            # Return a 1-D float Box [0, num_states - 1]
+            return spaces.Box(
+                low=0,
+                high=self.num_states - 1,
+                shape=(1,),
+                dtype=jnp.float32,
+            )
 
     def state_space(self, params: TabularEnvParams) -> spaces.Dict:
-        return spaces.Dict({
-            "state_idx": spaces.Discrete(self.num_states),
-            "steps": spaces.Discrete(params.horizon),
-            "done": spaces.Discrete(2),
-            "time": spaces.Discrete(params.max_steps_in_episode)
-        })
+        """
+        The underlying environment state is stored in a Dict.
+        """
+        return spaces.Dict(
+            {
+                "state_idx": spaces.Discrete(self.num_states),
+                "steps": spaces.Discrete(params.horizon),
+                "done": spaces.Discrete(2),
+                "time": spaces.Discrete(params.max_steps_in_episode),
+            }
+        )
 
+    # ------------
+    # RESET
+    # ------------
     def reset_env(
         self,
         key: chex.PRNGKey,
         params: Optional[TabularEnvParams] = None
     ) -> Tuple[chex.Array, TabularState]:
+        """
+        Reset environment to initial state: idx=0, steps=0, done=False.
+        """
         if params is None:
             params = self.default_params()
+
         init_state = TabularState(
             state_idx=jnp.array(0, dtype=jnp.int32),
             steps=jnp.array(0, dtype=jnp.int32),
@@ -94,6 +137,9 @@ class TabularEnv(environment.Environment):  # No generic subscript here
         init_obs = self.get_obs(init_state, params)
         return init_obs, init_state
 
+    # ------------
+    # STEP
+    # ------------
     def step_env(
         self,
         key: chex.PRNGKey,
@@ -101,10 +147,14 @@ class TabularEnv(environment.Environment):  # No generic subscript here
         action: Union[int, float, chex.Array],
         params: Optional[TabularEnvParams] = None
     ) -> Tuple[chex.Array, TabularState, jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
+        """
+        Execute a tabular transition. If done=True, remain in same state with 0 reward.
+        """
         if params is None:
             params = self.default_params()
 
         def if_done_fn(_):
+            # Already done, stay in same state, zero reward
             reward = jnp.array(0.0, dtype=jnp.float32)
             next_obs = self.get_obs(state, params)
             info = {
@@ -115,22 +165,24 @@ class TabularEnv(environment.Environment):  # No generic subscript here
                 "done_by_reward": jnp.array(False),
                 "discount": self.discount(state, params),
             }
-            return (next_obs, state, reward, state.done, info)
+            return next_obs, state, reward, state.done, info
 
         def if_not_done_fn(_):
+            # Look up the next state index and reward
             next_state_idx = self.transitions[state.state_idx, action]
             reward = self.rewards[state.state_idx, action]
 
             new_steps = state.steps + 1
             done_by_terminal = (next_state_idx == self.TERMINAL_STATE)
             done_by_horizon = (new_steps >= params.horizon)
-            done_by_reward = (reward != 0) & params.done_on_reward
+            done_by_reward = (reward != 0) & (params.done_on_reward)
             done_new = done_by_terminal | done_by_horizon | done_by_reward
 
+            # If horizon ended but no real terminal, optionally add no_done_reward
             reward += jnp.where(
                 done_by_horizon & ~done_by_terminal,
                 jnp.float32(params.no_done_reward),
-                jnp.float32(0)
+                jnp.float32(0),
             )
 
             next_state = TabularState(
@@ -140,6 +192,7 @@ class TabularEnv(environment.Environment):  # No generic subscript here
                 time=state.time + 1
             )
             next_obs = self.get_obs(next_state, params)
+
             info = {
                 "steps": new_steps,
                 "reward": reward,
@@ -148,24 +201,33 @@ class TabularEnv(environment.Environment):  # No generic subscript here
                 "done_by_reward": jnp.array(done_by_reward),
                 "discount": self.discount(next_state, params),
             }
-            return (next_obs, next_state, reward, jnp.array(done_new), info)
+            return next_obs, next_state, reward, jnp.array(done_new), info
 
+        # Use jax.lax.cond to choose path
         return jax.lax.cond(state.done, if_done_fn, if_not_done_fn, operand=None)
 
+    # ------------
+    # OBSERVATION
+    # ------------
     def get_obs(
         self,
         state: TabularState,
         params: Optional[TabularEnvParams] = None,
         key: Optional[chex.PRNGKey] = None
     ) -> chex.Array:
+        """
+        Return either a screen image of shape (H, W, 3) or a 1-D float array [state_idx].
+        """
         if params is None:
             params = self.default_params()
 
+        # Now that use_screen_observations is a static python bool, we can do a normal if-statement
         if params.use_screen_observations and self.screens is not None:
             def valid_screen_fn(idx):
                 return self.screens[self.screen_mapping[idx]]
 
             def invalid_screen_fn(_):
+                # If it's out of range or terminal
                 return jnp.zeros(self.screens.shape[1:], dtype=jnp.uint8)
 
             return jax.lax.cond(
@@ -175,10 +237,18 @@ class TabularEnv(environment.Environment):  # No generic subscript here
                 state.state_idx
             )
         else:
-            return jnp.array(state.state_idx, dtype=jnp.int32)
+            # Return shape (1,) for the scalar index
+            return jnp.array([state.state_idx], dtype=jnp.float32)
 
     def discount(self, state: TabularState, params: Optional[TabularEnvParams] = None) -> jnp.ndarray:
+        """
+        By default, discount = 1 if not done, else 0.
+        """
         return jnp.array(1.0 - state.done, dtype=jnp.float32)
 
     def is_terminal(self, state: TabularState, params: TabularEnvParams) -> jnp.ndarray:
+        """
+        If you rely on the parent's discount logic, define is_terminal.
+        Here we simply check the 'done' flag in state.
+        """
         return state.done
