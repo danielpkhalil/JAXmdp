@@ -1,15 +1,16 @@
 """
-ppo_tabular.py
+ppo_tabular_wandb.py
 
 Usage:
-    # 1) Make sure you have a "tabular_env.py" file (or similar) that defines
-    #    your TabularEnv class, with the minor additions (is_terminal, etc.).
-    #
-    # 2) Run this script. If you want to train on your custom .npz file:
-    #    config["ENV_NAME"] = "TabularMDP"
-    #    config["ENV_FILE"] = "path/to/your_mdp.npz"
-    #
-    # 3) Otherwise set e.g. config["ENV_NAME"] = "CartPole-v1" to train on CartPole.
+    1) Make sure you have a local "gymnax_env.py" or similar that defines
+       TabularEnv and TabularEnvParams (with the updated code so it returns
+       a Box observation and uses static fields).
+    2) pip install wandb
+    3) python ppo_tabular_wandb.py
+
+This script:
+    - Uses the same PPO code as before
+    - Logs results to Weights & Biases
 """
 
 import jax
@@ -17,20 +18,21 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import optax
+import wandb   # <-- for logging
 
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from typing import Sequence, NamedTuple, Any
 
 import distrax
-import gymnax  # for e.g. CartPole
-
-
+import gymnax
 from gymnax.wrappers.purerl import FlattenObservationWrapper, LogWrapper
+
+# Import your custom environment:
 from gymnax_env import TabularEnv, TabularEnvParams
 
-# If you have your custom TabularEnv in a local file:
-# from tabular_env import TabularEnv
+import matplotlib.pyplot as plt
+
 
 # ------------------------------
 # Actor-Critic Module
@@ -94,61 +96,44 @@ class Transition(NamedTuple):
 # Main Training Function
 # ------------------------------
 def make_train(config):
-    # How many total times we will run update epochs:
+    # How many total updates:
     config["NUM_UPDATES"] = (
-            config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
 
-    # Minibatch size for gradient updates:
+    # Minibatch size:
     config["MINIBATCH_SIZE"] = (
-            config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+        config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    # ----------------------------------------------------------------------
     # 1) CREATE ENVIRONMENT (TabularEnv or regular Gymnax)
-    # ----------------------------------------------------------------------
     if config["ENV_NAME"] == "TabularMDP":
-        # Import from your local file if needed:
-        # from tabular_env import TabularEnv
-        from gymnax_env import TabularEnv
-
         env = TabularEnv(config["ENV_FILE"])
         env_params = env.default_params()
-        # Example: env_params = env.default_params().replace(use_screen_observations=False)
-        # if you want to override certain parameters
     else:
-        # Fallback to regular Gymnax environment
         env, env_params = gymnax.make(config["ENV_NAME"])
 
-    # Optional: if you have wrappers, apply them:
+    # Apply wrappers to environment
     env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
 
-    # ----------------------------------------------------------------------
     # 2) Learning rate schedule
-    # ----------------------------------------------------------------------
     def linear_schedule(count):
-        """Linear decay of LR over time."""
         frac = (
-                1.0
-                - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]))
-                / config["NUM_UPDATES"]
+            1.0
+            - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]))
+            / config["NUM_UPDATES"]
         )
         return config["LR"] * frac
 
-    # ----------------------------------------------------------------------
     # 3) TRAIN FUNCTION
-    # ----------------------------------------------------------------------
     def train(rng):
-        # -----------------------
         # INIT NETWORK
-        # -----------------------
         network = ActorCritic(
             action_dim=env.action_space(env_params).n,
             activation=config["ACTIVATION"],
         )
         rng, init_rng = jax.random.split(rng)
-        # Construct a zero observation of the correct shape
         init_obs = jnp.zeros(env.observation_space(env_params).shape)
         network_params = network.init(init_rng, init_obs)
 
@@ -170,30 +155,23 @@ def make_train(config):
             tx=tx,
         )
 
-        # -----------------------
         # INIT ENV
-        # -----------------------
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
 
-        # -----------------------
         # SCAN: Update Steps
-        # -----------------------
         def _update_step(runner_state, _):
             train_state, env_state, last_obs, rng = runner_state
 
-            # 1) Collect a rollout of length NUM_STEPS
+            # 1) Collect a rollout
             def _env_step(runner_state, _):
                 train_state, env_state, last_obs, rng = runner_state
-
-                # Choose action (sample from policy)
                 rng, act_rng = jax.random.split(rng)
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=act_rng)
                 log_prob = pi.log_prob(action)
 
-                # Step env
                 rng, step_rng = jax.random.split(rng)
                 step_rngs = jax.random.split(step_rng, config["NUM_ENVS"])
                 obsv, env_state, reward, done, info = jax.vmap(
@@ -218,13 +196,13 @@ def make_train(config):
                 def _get_advantages(carry, transition):
                     gae, next_value = carry
                     delta = (
-                            transition.reward
-                            + config["GAMMA"] * next_value * (1.0 - transition.done)
-                            - transition.value
+                        transition.reward
+                        + config["GAMMA"] * next_value * (1.0 - transition.done)
+                        - transition.value
                     )
                     gae = (
-                            delta
-                            + config["GAMMA"] * config["GAE_LAMBDA"] * (1.0 - transition.done) * gae
+                        delta
+                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1.0 - transition.done) * gae
                     )
                     return (gae, transition.value), gae
 
@@ -251,7 +229,7 @@ def make_train(config):
 
                         # Value loss
                         value_pred_clipped = traj_batch.value + (
-                                value - traj_batch.value
+                            value - traj_batch.value
                         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
                         value_losses = jnp.square(value - targets)
                         value_losses_clipped = jnp.square(value_pred_clipped - targets)
@@ -274,9 +252,9 @@ def make_train(config):
                         entropy = jnp.mean(pi.entropy())
 
                         total_loss = (
-                                loss_actor
-                                + config["VF_COEF"] * value_loss
-                                - config["ENT_COEF"] * entropy
+                            loss_actor
+                            + config["VF_COEF"] * value_loss
+                            - config["ENT_COEF"] * entropy
                         )
                         return total_loss, (value_loss, loss_actor, entropy)
 
@@ -317,7 +295,6 @@ def make_train(config):
                     _update_minibatch, train_state, minibatches
                 )
 
-                # Return the updated state so we can do multiple epochs
                 update_state = (train_state, traj_batch, advantages, targets, rng)
                 return update_state, losses
 
@@ -328,27 +305,21 @@ def make_train(config):
             train_state = update_state[0]
             rng = update_state[-1]
 
-            # For logging, we record the last transition info
             metric = traj_batch.info
 
-            # Debugging prints if requested:
+            # Debug prints if requested
             if config.get("DEBUG"):
                 def debug_callback(info):
                     rets = info["returned_episode_returns"][info["returned_episode"]]
                     timesteps = info["timestep"][info["returned_episode"]] * config["NUM_ENVS"]
                     for t in range(len(timesteps)):
                         print(f"global step={timesteps[t]}, episodic return={rets[t]}")
-
-                # no-op if this environment doesn't supply "returned_episode" etc.
                 jax.debug.callback(debug_callback, metric)
 
-            # Return runner_state, metric
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
 
-        # -----------------------
         # Run the entire training
-        # -----------------------
         rng, train_rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, train_rng)
         runner_state, metrics = jax.lax.scan(
@@ -367,14 +338,16 @@ def make_train(config):
 # ENTRY POINT
 # ------------------------------
 if __name__ == "__main__":
+    # Define your config
     config = {
-        # Training
+        # PPO hyperparams
         "LR": 2.5e-4,
         "NUM_ENVS": 4,
         "NUM_STEPS": 128,
         "TOTAL_TIMESTEPS": 5e3,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
+
         # PPO constants
         "GAMMA": 0.99,
         "GAE_LAMBDA": 0.95,
@@ -383,9 +356,10 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
+
         # Choose "CartPole-v1" or your "TabularMDP"
         "ENV_NAME": "TabularMDP",
-        # If using TabularMDP, specify the .npz problem file:
+        # If using TabularMDP, specify the .npz file
         "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
 
         # LR schedule
@@ -395,21 +369,62 @@ if __name__ == "__main__":
         "DEBUG": False,
     }
 
+    # 1) Initialize wandb logging
+    wandb.init(
+        project="my_tabular_ppo",  # project name on wandb
+        config=config,             # store hyperparams in wandb
+    )
+
     rng = jax.random.PRNGKey(42)
+
+    # 2) Create the train function & JIT it
     train_fn = make_train(config)
-    # Compile it
     train_jit = jax.jit(train_fn)
-    # Run training
+
+    # 3) Run training
     out = train_jit(rng)
-    print("Training finished. Final output:", out)
+    print("Training finished. Final output keys:", out.keys())
 
-    import time
-    import matplotlib.pyplot as plt
+    # out["metrics"] is a pytree that includes the 'info' logs from the last transitions
+    # By default, LogWrapper keeps track of "returned_episode_returns". We can average them.
 
-    t0 = time.time()
-    out = jax.block_until_ready(train_jit(rng))
-    print(f"time: {time.time() - t0:.2f} s")
-    plt.plot(out["metrics"]["returned_episode_returns"].mean(-1).reshape(-1))
-    plt.xlabel("Update Step")
-    plt.ylabel("Return")
-    plt.show()
+    # Convert from device to host numpy
+    metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
+
+    # The LogWrapper typically logs:
+    #   metrics["returned_episode_returns"] of shape [NUM_STEPS, NUM_ENVS, ...]
+    # or something similar. We'll do a mean across envs per step.
+    # You may need to inspect the exact shape. We'll assume it's (NUM_STEPS, NUM_ENVS).
+    if "returned_episode_returns" in metrics:
+        # shape: (T, N_env) across the entire training or something similar
+        # Sometimes it might be (NUM_UPDATES, NUM_STEPS, NUM_ENVS)
+        # We'll attempt to do an overall mean across the last dimension:
+        try:
+            mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
+        except:
+            # If shape is different, adjust this line accordingly
+            mean_returns = metrics["returned_episode_returns"]
+
+        # Flatten in case there's an extra dimension for steps
+        mean_returns = mean_returns.reshape(-1)
+
+        # 4) Log to wandb each step
+        for i, ret in enumerate(mean_returns):
+            wandb.log({"update_step": i, "mean_return": ret})
+
+        # 5) Also log a plot of these returns
+        plt.figure()
+        plt.plot(mean_returns, label="Mean Return")
+        plt.xlabel("Update Step")
+        plt.ylabel("Return")
+        plt.title("PPO Training Performance")
+        plt.legend()
+        plt.tight_layout()
+
+        # Log the figure to wandb
+        wandb.log({"training_returns_plot": wandb.Image(plt)})
+
+        plt.show()  # or comment out if running headless
+
+    # 6) Finish the wandb run
+    wandb.finish()
