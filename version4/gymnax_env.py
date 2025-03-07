@@ -27,8 +27,8 @@ class TabularEnvParams(environment.EnvParams):
     done_on_reward: bool = struct.field(default=False, pytree_node=False)
     no_done_reward: float = struct.field(default=0.0, pytree_node=False)
     use_screen_observations: bool = struct.field(default=True, pytree_node=False)
-    horizon: int = struct.field(default=10000, pytree_node=False)
-    max_steps_in_episode: int = struct.field(default=10000, pytree_node=False)
+    horizon: int = struct.field(default=100, pytree_node=False)
+    max_steps_in_episode: int = struct.field(default=100, pytree_node=False)
 
 class TabularEnv(environment.Environment):
     """

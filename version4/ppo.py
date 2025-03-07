@@ -358,7 +358,7 @@ if __name__ == "__main__":
         "ACTIVATION": "tanh",
 
         # Choose "CartPole-v1" or your "TabularMDP"
-        "ENV_NAME": "CartPole-v1",
+        "ENV_NAME": "TabularMDP",
         # If using TabularMDP, specify the .npz file
         "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
 
