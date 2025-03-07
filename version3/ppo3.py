@@ -9,6 +9,7 @@ from typing import NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
 import wandb
+import time
 
 # Import your custom TabularEnv creation function and wrappers
 from gymnax_env import create_tabular_env
@@ -247,7 +248,32 @@ if __name__ == "__main__":
     print(out["metrics"])
 
     # After training, use the returned metrics (an array with one entry per update)
-    metrics = out["metrics"]
-    for update, reward in enumerate(metrics):
+    # metrics = out["metrics"]
+    # for update, reward in enumerate(metrics):
+    #     current_timestep = update * config["NUM_ENVS"] * config["NUM_STEPS"]
+    #     wandb.log({"timestep": int(current_timestep), "reward": float(reward)})
+
+    # Run training and wait until the computation is done.
+    t0 = time.time()
+    out = jax.block_until_ready(train_jit(rng))
+    print(f"Training time: {time.time() - t0:.2f} s")
+
+    # Extract the learning curve: assume out["metrics"] is a list/dict of metrics per update.
+    returned_episode_returns = jnp.array(
+        [m["returned_episode_returns"] for m in out["metrics"]]
+    )
+    curve = returned_episode_returns.mean(-1).reshape(-1)
+
+    import matplotlib.pyplot as plt
+
+    plt.plot(curve)
+    plt.xlabel("Update Step")
+    plt.ylabel("Return")
+    plt.title("PPO Training Returns")
+    plt.show()
+
+    # Log the returns to wandb.
+    for update, ret in enumerate(curve):
         current_timestep = update * config["NUM_ENVS"] * config["NUM_STEPS"]
-        wandb.log({"timestep": int(current_timestep), "reward": float(reward)})
+        wandb.log({"timestep": int(current_timestep), "reward": float(ret)})
+
