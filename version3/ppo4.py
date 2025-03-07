@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import time
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -14,10 +15,10 @@ import wandb
 from gymnax_env import create_tabular_env
 from gymnax.wrappers.purerl import LogWrapper, FlattenObservationWrapper
 
+
 # ------------------------------------------------------------------------------
 # Actor-Critic Network Definition
 # ------------------------------------------------------------------------------
-
 class ActorCritic(nn.Module):
     action_dim: int
     activation: str = "tanh"
@@ -49,10 +50,10 @@ class ActorCritic(nn.Module):
 
         return pi, critic_value
 
+
 # ------------------------------------------------------------------------------
 # Transition NamedTuple for storing trajectories
 # ------------------------------------------------------------------------------
-
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -62,17 +63,18 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: Any
 
+
 # ------------------------------------------------------------------------------
 # PPO Training Function
 # ------------------------------------------------------------------------------
-
 def make_train(config):
     # Derived configurations
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // (config["NUM_STEPS"] * config["NUM_ENVS"]))
     config["MINIBATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"])
 
     # Create the custom TabularEnv
-    env = create_tabular_env("/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz")
+    env = create_tabular_env(
+        "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz")
     # If using screen observations, do NOT flatten them here so the network can process images.
     # env = FlattenObservationWrapper(env)  # Not used for image observations.
     env = LogWrapper(env)
@@ -143,6 +145,7 @@ def make_train(config):
                     delta = reward + config["GAMMA"] * next_value * (1 - done) - value
                     gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
                     return (gae, value), gae
+
                 _, advantages = jax.lax.scan(
                     _get_advantages,
                     (jnp.zeros_like(last_val), last_val),
@@ -158,10 +161,12 @@ def make_train(config):
             def _update_epoch(update_state, unused):
                 def _update_minbatch(train_state, batch_info):
                     traj_batch, gae, targets = batch_info
+
                     def _loss_fn(params, traj_batch, gae, targets):
                         pi, value = network.apply(params, traj_batch.obs)
                         log_prob = pi.log_prob(traj_batch.action)
-                        value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
+                        value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(-config["CLIP_EPS"],
+                                                                                                config["CLIP_EPS"])
                         value_losses = jnp.square(value - targets)
                         value_losses_clipped = jnp.square(value_pred_clipped - targets)
                         value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
@@ -173,6 +178,7 @@ def make_train(config):
                         entropy = pi.entropy().mean()
                         total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
                         return total_loss, (value_loss, loss_actor, entropy)
+
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     (total_loss, aux_vals), grads = grad_fn(train_state.params, traj_batch, gae, targets)
                     train_state = train_state.apply_gradients(grads=grads)
@@ -181,7 +187,8 @@ def make_train(config):
                 train_state, traj_batch, gae, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], "batch size must equal num_steps * num_envs"
+                assert batch_size == config["NUM_STEPS"] * config[
+                    "NUM_ENVS"], "batch size must equal num_steps * num_envs"
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, gae, targets)
                 batch = jax.tree_util.tree_map(lambda x: x.reshape((batch_size,) + x.shape[2:]), batch)
@@ -198,9 +205,9 @@ def make_train(config):
             update_state, loss_info = jax.lax.scan(_update_epoch, update_state, None, config["UPDATE_EPOCHS"])
             train_state = update_state[0]
 
-            # --- Minimal modification: compute cumulative reward over NUM_STEPS ---
+            # --- Compute cumulative reward over NUM_STEPS and wrap it in a dictionary ---
             reward_sum = jnp.sum(traj_batch.reward)
-            metric = reward_sum  # You can include more info if needed.
+            metric = {"returned_episode_returns": reward_sum}
 
             rng = update_state[-1]
             runner_state = (train_state, env_state, last_obs, rng)
@@ -213,18 +220,18 @@ def make_train(config):
 
     return train
 
+
 # ------------------------------------------------------------------------------
 # Main entry point
 # ------------------------------------------------------------------------------
-
 if __name__ == "__main__":
     config = {
         "LR": 2.5e-4,
-        "NUM_ENVS": 1,  # 4
+        "NUM_ENVS": 1,  # e.g., 4 for parallel environments
         "NUM_STEPS": 128,
         "TOTAL_TIMESTEPS": 5e3,
         "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 1,  # 4
+        "NUM_MINIBATCHES": 1,  # e.g., 4 minibatches
         "GAMMA": 0.99,
         "GAE_LAMBDA": 0.95,
         "CLIP_EPS": 0.2,
@@ -242,12 +249,23 @@ if __name__ == "__main__":
     rng = jax.random.PRNGKey(30)
     train_fn = make_train(config)
     train_jit = jax.jit(train_fn)
-    out = train_jit(rng)
-    print("Training finished. Metrics:")
-    print(out["metrics"])
 
-    # After training, use the returned metrics (an array with one entry per update)
-    metrics = out["metrics"]
-    for update, reward in enumerate(metrics):
+    # Run training and wait until the computation is done.
+    t0 = time.time()
+    out = jax.block_until_ready(train_jit(rng))
+    print(f"Training time: {time.time() - t0:.2f} s")
+
+    # Plot the learning curve like the purejaxRL example.
+    import matplotlib.pyplot as plt
+
+    plt.plot(out["metrics"]["returned_episode_returns"].mean(-1).reshape(-1))
+    plt.xlabel("Update Step")
+    plt.ylabel("Return")
+    plt.title("PPO Training Returns")
+    plt.show()
+
+    # Log the returns to wandb.
+    curve = out["metrics"]["returned_episode_returns"].mean(-1).reshape(-1)
+    for update, ret in enumerate(curve):
         current_timestep = update * config["NUM_ENVS"] * config["NUM_STEPS"]
-        wandb.log({"timestep": int(current_timestep), "reward": float(reward)})
+        wandb.log({"timestep": int(current_timestep), "reward": float(ret)})
