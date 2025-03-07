@@ -206,8 +206,8 @@ def make_train(config):
             train_state = update_state[0]
 
             # --- Compute cumulative reward over NUM_STEPS and wrap it in a dictionary ---
-            reward_sum = jnp.sum(traj_batch.reward)
-            metric = {"returned_episode_returns": reward_sum}
+            metric = traj_batch.info
+
 
             rng = update_state[-1]
             runner_state = (train_state, env_state, last_obs, rng)
