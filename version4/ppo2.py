@@ -1,17 +1,17 @@
 """
-ppo_tabular_wandb_cnn.py
+ppo_tabular_wandb_cnn_universal.py
 
 Usage:
-    1) Ensure your local "gymnax_env.py" defines a TabularEnv that returns
-       a Box observation shaped like (H, W, C). If it still returns 1D
-       vectors, CNN won't make sense. Adjust your environment as necessary.
+    1) Ensure your local "gymnax_env.py" (or other env file) defines a TabularEnv
+       that returns a Box observation shaped like (H, W, C). If it returns a
+       1D vector, you'll need a different architecture (e.g. an MLP).
     2) pip install wandb
-    3) python ppo_tabular_wandb_cnn.py
+    3) python ppo_tabular_wandb_cnn_universal.py
 
 This script:
-    - Same PPO code as before
+    - Same PPO code
     - Logs results to Weights & Biases
-    - Uses a CNN instead of an MLP for the actor-critic
+    - Uses a CNN with global average pooling to adapt to a variety of input shapes.
 """
 
 import jax
@@ -27,7 +27,7 @@ from typing import Sequence, NamedTuple, Any
 
 import distrax
 import gymnax
-from gymnax.wrappers.purerl import LogWrapper  # removed FlattenObservationWrapper
+from gymnax.wrappers.purerl import LogWrapper  # Not flattening the obs
 
 # Import your custom environment:
 from gymnax_env import TabularEnv, TabularEnvParams
@@ -36,45 +36,73 @@ import matplotlib.pyplot as plt
 
 
 # ------------------------------
-# Actor-Critic CNN Module
+# CNN-based Actor-Critic (Generalized)
 # ------------------------------
 class ActorCritic(nn.Module):
     """
     CNN-based actor-critic for discrete action spaces.
-    Assumes input observations are image-like: (H, W, C).
+
+    This architecture is designed to handle arbitrary (H, W, C) by:
+      1. Doing a couple of convolutions with stride.
+      2. Applying global average pooling over spatial dims (H, W).
+      3. A final dense layer before policy and value heads.
+
+    Adjust conv kernel sizes, number of filters, strides, and
+    the final Dense size to match your environment's scale.
     """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
         """
-        x shape: (batch, H, W, C) – or (H, W, C) if batch_size=1.
-        Adjust conv layers, kernel sizes, and strides to match your env’s obs shape.
+        x shape: (batch, H, W, C) – or (H, W, C) if batch=1.
         """
-        # Example: two simple conv layers
-        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(1, 1),
-                    kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-        x = nn.relu(x)
-        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1),
-                    kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-        x = nn.relu(x)
-
-        # Flatten
-        x = x.reshape((x.shape[0], -1))  # shape: (batch, features)
-
-        # FC layer (example: 64 units)
-        x = nn.Dense(features=64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        # 1. Conv block #1
+        x = nn.Conv(
+            features=32,
+            kernel_size=(3, 3),
+            strides=(2, 2),         # reduce spatial dimension
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(x)
         x = nn.relu(x)
 
-        # Policy head (categorical logits)
+        # 2. Conv block #2
+        x = nn.Conv(
+            features=64,
+            kernel_size=(3, 3),
+            strides=(2, 2),         # further reduce
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(x)
+        x = nn.relu(x)
+
+        # 3. Global average pooling over spatial dims
+        # (i.e. take the mean across H & W). We keep the channel dimension.
+        # x now has shape (batch, H', W', 64). We reduce to (batch, 64).
+        x = x.mean(axis=(1, 2))
+
+        # 4. Fully connected layer (64 units)
+        x = nn.Dense(
+            features=64,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(x)
+        x = nn.relu(x)
+
+        # 5. Policy head (categorical logits)
         logits = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
         )(x)
         pi = distrax.Categorical(logits=logits)
 
-        # Value head
+        # 6. Value head (predict scalar)
         critic = nn.Dense(
-            1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)
+            1,
+            kernel_init=orthogonal(1.0),
+            bias_init=constant(0.0),
         )(x)
         value = jnp.squeeze(critic, axis=-1)
 
@@ -115,7 +143,7 @@ def make_train(config):
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
-    # Remove FlattenObservationWrapper so we keep the shape for CNN
+    # We do NOT flatten the observation; we rely on the raw shape for CNN.
     env = LogWrapper(env)
 
     # 2) Learning rate schedule
@@ -134,7 +162,8 @@ def make_train(config):
             action_dim=env.action_space(env_params).n,
         )
         rng, init_rng = jax.random.split(rng)
-        # If your tabular env returns shape (H, W, C), confirm it matches:
+
+        # Example: shape might be (H, W, C).
         init_obs = jnp.zeros(env.observation_space(env_params).shape)
         network_params = network.init(init_rng, init_obs)
 
@@ -359,25 +388,21 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
 
-        # Activation is removed or replaced in CNN for simplicity,
-        # you can add an activation param if you like.
-
-        # Choose "CartPole-v1" or your "TabularMDP"
-        "ENV_NAME": "TabularMDP",
-        # If using TabularMDP, specify the .npz file
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
-
-        # LR schedule
+        # If you want to schedule the LR linearly downward:
         "ANNEAL_LR": True,
 
-        # Debug
+        # For debugging
         "DEBUG": False,
+
+        # Environment
+        "ENV_NAME": "TabularMDP",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
     }
 
     # 1) Initialize wandb logging
     wandb.init(
-        project="my_tabular_ppo_cnn",  # project name on wandb
-        config=config,                 # store hyperparams in wandb
+        project="my_tabular_ppo_cnn_universal",  # project name on wandb
+        config=config,                           # store hyperparams in wandb
     )
 
     rng = jax.random.PRNGKey(42)
@@ -405,7 +430,7 @@ if __name__ == "__main__":
         for i, ret in enumerate(mean_returns):
             wandb.log({"update_step": i, "mean_return": ret})
 
-        # 5) Plot of these returns
+        # 5) Plot these returns
         plt.figure()
         plt.plot(mean_returns, label="Mean Return")
         plt.xlabel("Update Step")
