@@ -383,9 +383,7 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
 
-        # Choose an environment that provides (H, W, C) observations.
-        # e.g., "Pong-v5" if using gymnax Atari, or any other image-based env:
-        "ENV_NAME": "Pong-v5",
+        "ENV_NAME": "TabularMDP",
 
         # LR schedule
         "ANNEAL_LR": True,
