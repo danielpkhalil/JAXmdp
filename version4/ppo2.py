@@ -1,16 +1,17 @@
 """
-ppo_cnn_wandb.py
+ppo_tabular_wandb_cnn.py
 
 Usage:
-    1) Ensure you have an environment that returns an image-based observation,
-       e.g. (H, W, C).
+    1) Ensure your local "gymnax_env.py" defines a TabularEnv that returns
+       a Box observation shaped like (H, W, C). If it still returns 1D
+       vectors, CNN won't make sense. Adjust your environment as necessary.
     2) pip install wandb
-    3) python ppo_cnn_wandb.py
+    3) python ppo_tabular_wandb_cnn.py
 
 This script:
-    - Uses the same PPO code as before
+    - Same PPO code as before
     - Logs results to Weights & Biases
-    - Uses a CNN for the policy/value instead of an MLP
+    - Uses a CNN instead of an MLP for the actor-critic
 """
 
 import jax
@@ -18,7 +19,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import optax
-import wandb  # <-- for logging
+import wandb   # <-- for logging
 
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
@@ -26,80 +27,59 @@ from typing import Sequence, NamedTuple, Any
 
 import distrax
 import gymnax
-from gymnax.wrappers.purerl import FlattenObservationWrapper, LogWrapper
+from gymnax.wrappers.purerl import LogWrapper  # removed FlattenObservationWrapper
 
-# If you have a custom environment:
-# from gymnax_env import TabularEnv, TabularEnvParams
+# Import your custom environment:
+from gymnax_env import TabularEnv, TabularEnvParams
 
 import matplotlib.pyplot as plt
+
 
 # ------------------------------
 # Actor-Critic CNN Module
 # ------------------------------
-class ActorCriticCNN(nn.Module):
-    """Actor-critic model with a CNN for image-based, discrete-action tasks."""
+class ActorCritic(nn.Module):
+    """
+    CNN-based actor-critic for discrete action spaces.
+    Assumes input observations are image-like: (H, W, C).
+    """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
-        # Expect x shape: (batch, H, W, C)
-        # Standard "Nature" CNN (Mnih et al. 2015) used for Atari-like inputs
-
-        # Convolutional feature extractor
-        x = nn.Conv(
-            features=32,
-            kernel_size=(8, 8),
-            strides=(4, 4),
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(x)
+        """
+        x shape: (batch, H, W, C) – or (H, W, C) if batch_size=1.
+        Adjust conv layers, kernel sizes, and strides to match your env’s obs shape.
+        """
+        # Example: two simple conv layers
+        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(1, 1),
+                    kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         x = nn.relu(x)
-
-        x = nn.Conv(
-            features=64,
-            kernel_size=(4, 4),
-            strides=(2, 2),
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(x)
-        x = nn.relu(x)
-
-        x = nn.Conv(
-            features=64,
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(x)
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1),
+                    kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         x = nn.relu(x)
 
         # Flatten
-        x = x.reshape((x.shape[0], -1))
+        x = x.reshape((x.shape[0], -1))  # shape: (batch, features)
 
-        # Fully connected layer
-        x = nn.Dense(
-            features=512,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(x)
+        # FC layer (example: 64 units)
+        x = nn.Dense(features=64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         x = nn.relu(x)
 
-        # Policy head
+        # Policy head (categorical logits)
         logits = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(x)
         pi = distrax.Categorical(logits=logits)
 
         # Value head
         critic = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
-            bias_init=constant(0.0),
+            1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)
         )(x)
+        value = jnp.squeeze(critic, axis=-1)
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        return pi, value
+
 
 # ------------------------------
 # Transition NamedTuple
@@ -128,20 +108,14 @@ def make_train(config):
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    # 1) CREATE ENVIRONMENT
+    # 1) CREATE ENVIRONMENT (TabularEnv or regular Gymnax)
     if config["ENV_NAME"] == "TabularMDP":
-        raise ValueError("CNN architecture is not applicable for a tabular environment!")
-        # If you had a custom environment returning images, you could replace the above.
-        # env = TabularEnv(config["ENV_FILE"])
-        # env_params = env.default_params()
+        env = TabularEnv(config["ENV_FILE"])
+        env_params = env.default_params()
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
-    # Example wrappers; if your environment is already image-based, you might not flatten:
-    # Remove FlattenObservationWrapper if your env is already in shape (H, W, C)
-    # but here for demonstration, I'll keep it commented out.
-    # env = FlattenObservationWrapper(env)
-
+    # Remove FlattenObservationWrapper so we keep the shape for CNN
     env = LogWrapper(env)
 
     # 2) Learning rate schedule
@@ -156,11 +130,11 @@ def make_train(config):
     # 3) TRAIN FUNCTION
     def train(rng):
         # INIT NETWORK
-        network = ActorCriticCNN(
+        network = ActorCritic(
             action_dim=env.action_space(env_params).n,
         )
         rng, init_rng = jax.random.split(rng)
-        # Suppose your observation space is (84, 84, 4) for an Atari-like setting:
+        # If your tabular env returns shape (H, W, C), confirm it matches:
         init_obs = jnp.zeros(env.observation_space(env_params).shape)
         network_params = network.init(init_rng, init_obs)
 
@@ -195,6 +169,7 @@ def make_train(config):
             def _env_step(runner_state, _):
                 train_state, env_state, last_obs, rng = runner_state
                 rng, act_rng = jax.random.split(rng)
+
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=act_rng)
                 log_prob = pi.log_prob(action)
@@ -299,6 +274,7 @@ def make_train(config):
                 batch_size = config["NUM_STEPS"] * config["NUM_ENVS"]
                 permutation = jax.random.permutation(perm_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
+
                 # Flatten from [T, N_env, ...] -> [T*N_env, ...]
                 batch = jax.tree_util.tree_map(
                     lambda x: x.reshape((batch_size,) + x.shape[2:]),
@@ -383,7 +359,13 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
 
+        # Activation is removed or replaced in CNN for simplicity,
+        # you can add an activation param if you like.
+
+        # Choose "CartPole-v1" or your "TabularMDP"
         "ENV_NAME": "TabularMDP",
+        # If using TabularMDP, specify the .npz file
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
 
         # LR schedule
         "ANNEAL_LR": True,
@@ -394,8 +376,8 @@ if __name__ == "__main__":
 
     # 1) Initialize wandb logging
     wandb.init(
-        project="my_tabular_ppo",  # or any project name
-        config=config,  # store hyperparams in wandb
+        project="my_tabular_ppo_cnn",  # project name on wandb
+        config=config,                 # store hyperparams in wandb
     )
 
     rng = jax.random.PRNGKey(42)
@@ -409,20 +391,21 @@ if __name__ == "__main__":
     print("Training finished. Final output keys:", out.keys())
 
     # out["metrics"] is a pytree that includes the 'info' logs from the last transitions
-    # By default, LogWrapper keeps track of "returned_episode_returns". We can average them.
     metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
 
+    # The LogWrapper typically logs "returned_episode_returns" with shape [NUM_STEPS, NUM_ENVS, ...]
     if "returned_episode_returns" in metrics:
-        # shape: (NUM_UPDATES, NUM_STEPS, NUM_ENVS) typically
         try:
             mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
         except:
             mean_returns = metrics["returned_episode_returns"]
         mean_returns = mean_returns.reshape(-1)
 
+        # 4) Log to wandb each step
         for i, ret in enumerate(mean_returns):
             wandb.log({"update_step": i, "mean_return": ret})
 
+        # 5) Plot of these returns
         plt.figure()
         plt.plot(mean_returns, label="Mean Return")
         plt.xlabel("Update Step")
@@ -433,7 +416,6 @@ if __name__ == "__main__":
 
         # Log the figure to wandb
         wandb.log({"training_returns_plot": wandb.Image(plt)})
-
         plt.show()
 
     # 6) Finish the wandb run
