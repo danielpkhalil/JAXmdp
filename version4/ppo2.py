@@ -1,17 +1,14 @@
 """
-ppo_tabular_wandb_cnn_universal.py
+ppo_tabular_wandb_cnn_universal_debug.py
 
 Usage:
-    1) Ensure your local "gymnax_env.py" (or other env file) defines a TabularEnv
-       that returns a Box observation shaped like (H, W, C). If it returns a
-       1D vector, you'll need a different architecture (e.g. an MLP).
+    1) Ensure your "gymnax_env.py" (or custom env) returns a Box observation shaped (H, W, C).
     2) pip install wandb
-    3) python ppo_tabular_wandb_cnn_universal.py
+    3) python ppo_tabular_wandb_cnn_universal_debug.py
 
-This script:
-    - Same PPO code
-    - Logs results to Weights & Biases
-    - Uses a CNN with global average pooling to adapt to a variety of input shapes.
+Key points:
+    - Uses a CNN with global average pooling (any H, W).
+    - Includes debug prints of shapes when config["DEBUG"] = True.
 """
 
 import jax
@@ -19,21 +16,20 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import optax
-import wandb   # <-- for logging
+import wandb   # for logging
 
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from typing import Sequence, NamedTuple, Any
+from typing import NamedTuple, Any
 
 import distrax
 import gymnax
-from gymnax.wrappers.purerl import LogWrapper  # Not flattening the obs
+from gymnax.wrappers.purerl import LogWrapper  # keep original observation shape
 
 # Import your custom environment:
 from gymnax_env import TabularEnv, TabularEnvParams
 
 import matplotlib.pyplot as plt
-
 
 # ------------------------------
 # CNN-based Actor-Critic (Generalized)
@@ -42,47 +38,44 @@ class ActorCritic(nn.Module):
     """
     CNN-based actor-critic for discrete action spaces.
 
-    This architecture is designed to handle arbitrary (H, W, C) by:
-      1. Doing a couple of convolutions with stride.
-      2. Applying global average pooling over spatial dims (H, W).
-      3. A final dense layer before policy and value heads.
+    This architecture:
+      1. Uses two conv layers with stride (2,2) to shrink spatial dims.
+      2. Applies global average pooling so we don't depend on a fixed (H, W).
+      3. Has a final dense layer before the policy & value heads.
 
-    Adjust conv kernel sizes, number of filters, strides, and
-    the final Dense size to match your environment's scale.
+    Adjust kernel sizes, number of features, or strides to suit your environment.
     """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
-        """
-        x shape: (batch, H, W, C) – or (H, W, C) if batch=1.
-        """
-        # 1. Conv block #1
+        # x shape: (batch, H, W, C), or (H, W, C) if batch=1.
+
+        # Conv layer #1
         x = nn.Conv(
             features=32,
             kernel_size=(3, 3),
-            strides=(2, 2),         # reduce spatial dimension
+            strides=(2, 2),
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
         )(x)
         x = nn.relu(x)
 
-        # 2. Conv block #2
+        # Conv layer #2
         x = nn.Conv(
             features=64,
             kernel_size=(3, 3),
-            strides=(2, 2),         # further reduce
+            strides=(2, 2),
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
         )(x)
         x = nn.relu(x)
 
-        # 3. Global average pooling over spatial dims
-        # (i.e. take the mean across H & W). We keep the channel dimension.
-        # x now has shape (batch, H', W', 64). We reduce to (batch, 64).
+        # Global average pooling across spatial dims
+        # If shape is (batch, H', W', 64), this becomes (batch, 64)
         x = x.mean(axis=(1, 2))
 
-        # 4. Fully connected layer (64 units)
+        # Dense layer
         x = nn.Dense(
             features=64,
             kernel_init=orthogonal(np.sqrt(2)),
@@ -90,7 +83,7 @@ class ActorCritic(nn.Module):
         )(x)
         x = nn.relu(x)
 
-        # 5. Policy head (categorical logits)
+        # Policy head
         logits = nn.Dense(
             self.action_dim,
             kernel_init=orthogonal(0.01),
@@ -98,7 +91,7 @@ class ActorCritic(nn.Module):
         )(x)
         pi = distrax.Categorical(logits=logits)
 
-        # 6. Value head (predict scalar)
+        # Value head
         critic = nn.Dense(
             1,
             kernel_init=orthogonal(1.0),
@@ -136,14 +129,14 @@ def make_train(config):
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    # 1) CREATE ENVIRONMENT (TabularEnv or regular Gymnax)
+    # 1) Create Environment
     if config["ENV_NAME"] == "TabularMDP":
         env = TabularEnv(config["ENV_FILE"])
         env_params = env.default_params()
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
-    # We do NOT flatten the observation; we rely on the raw shape for CNN.
+    # Keep the observation shape as-is for CNN
     env = LogWrapper(env)
 
     # 2) Learning rate schedule
@@ -158,13 +151,16 @@ def make_train(config):
     # 3) TRAIN FUNCTION
     def train(rng):
         # INIT NETWORK
-        network = ActorCritic(
-            action_dim=env.action_space(env_params).n,
-        )
+        network = ActorCritic(action_dim=env.action_space(env_params).n)
         rng, init_rng = jax.random.split(rng)
 
-        # Example: shape might be (H, W, C).
-        init_obs = jnp.zeros(env.observation_space(env_params).shape)
+        # Let's check env.observation_space shape
+        obs_shape = env.observation_space(env_params).shape
+        if config["DEBUG"]:
+            print("DEBUG: env.observation_space shape =", obs_shape)
+
+        # Make a dummy observation for init
+        init_obs = jnp.zeros(obs_shape)
         network_params = network.init(init_rng, init_obs)
 
         # Define optimizer
@@ -178,17 +174,25 @@ def make_train(config):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["LR"], eps=1e-5),
             )
-
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
             tx=tx,
         )
 
-        # INIT ENV
+        # INIT ENV (vectorized)
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
+
+        # OPTIONAL DEBUG: Try one non-jitted forward pass
+        if config["DEBUG"]:
+            # We'll take the first environment's observation, expand batch dim
+            single_obs = obsv[0][None]  # shape (1, H, W, C)
+            print("DEBUG: single_obs shape =", single_obs.shape)
+            pi_debug, val_debug = network.apply(train_state.params, single_obs)
+            print("DEBUG: pi.logits shape =", pi_debug.logits.shape,
+                  " | val shape =", val_debug.shape)
 
         # SCAN: Update Steps
         def _update_step(runner_state, _):
@@ -216,7 +220,8 @@ def make_train(config):
                 return runner_state, transition
 
             runner_state, traj_batch = jax.lax.scan(
-                _env_step, (train_state, env_state, last_obs, rng), None, config["NUM_STEPS"]
+                _env_step, (train_state, env_state, last_obs, rng),
+                None, config["NUM_STEPS"]
             )
             train_state, env_state, last_obs, rng = runner_state
 
@@ -387,12 +392,10 @@ if __name__ == "__main__":
         "ENT_COEF": 0.01,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
-
-        # If you want to schedule the LR linearly downward:
         "ANNEAL_LR": True,
 
-        # For debugging
-        "DEBUG": False,
+        # Debug toggle
+        "DEBUG": True,  # set to True to see shape prints (and debug info)
 
         # Environment
         "ENV_NAME": "TabularMDP",
@@ -401,13 +404,13 @@ if __name__ == "__main__":
 
     # 1) Initialize wandb logging
     wandb.init(
-        project="my_tabular_ppo_cnn_universal",  # project name on wandb
-        config=config,                           # store hyperparams in wandb
+        project="my_tabular_ppo_cnn_universal_debug",  # project name on wandb
+        config=config,
     )
 
     rng = jax.random.PRNGKey(42)
 
-    # 2) Create the train function & JIT it
+    # 2) Create and JIT the train function
     train_fn = make_train(config)
     train_jit = jax.jit(train_fn)
 
@@ -415,10 +418,9 @@ if __name__ == "__main__":
     out = train_jit(rng)
     print("Training finished. Final output keys:", out.keys())
 
-    # out["metrics"] is a pytree that includes the 'info' logs from the last transitions
+    # 4) Retrieve metrics
     metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
 
-    # The LogWrapper typically logs "returned_episode_returns" with shape [NUM_STEPS, NUM_ENVS, ...]
     if "returned_episode_returns" in metrics:
         try:
             mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
@@ -426,11 +428,11 @@ if __name__ == "__main__":
             mean_returns = metrics["returned_episode_returns"]
         mean_returns = mean_returns.reshape(-1)
 
-        # 4) Log to wandb each step
+        # Log to wandb each step
         for i, ret in enumerate(mean_returns):
             wandb.log({"update_step": i, "mean_return": ret})
 
-        # 5) Plot these returns
+        # Plot
         plt.figure()
         plt.plot(mean_returns, label="Mean Return")
         plt.xlabel("Update Step")
@@ -439,9 +441,8 @@ if __name__ == "__main__":
         plt.legend()
         plt.tight_layout()
 
-        # Log the figure to wandb
         wandb.log({"training_returns_plot": wandb.Image(plt)})
         plt.show()
 
-    # 6) Finish the wandb run
+    # 5) Finish the wandb run
     wandb.finish()
