@@ -1,44 +1,20 @@
 import time
-import numpy as np
+import os
 import jax
 import jax.numpy as jnp
-
 from gymnax_env import TabularEnv, TabularEnvParams, TabularState
 
-
-def create_dummy_problem_file(filename="dummy_problem.npz"):
-    """
-    Create a random MDP .npz file with transitions, rewards, and screen data.
-    """
-    num_states = 10
-    num_actions = 4
-    transitions = np.random.randint(0, num_states, size=(num_states, num_actions))
-    rewards = np.random.randn(num_states, num_actions).astype(np.float32)
-    # Suppose each state has a 64x64x3 "screen" observation
-    screens = np.random.randint(
-        0, 256, size=(num_states, 64, 64, 3), dtype=np.uint8
-    )
-    screen_mapping = np.arange(num_states)
-    np.savez(
-        filename,
-        transitions=transitions,
-        rewards=rewards,
-        screens=screens,
-        screen_mapping=screen_mapping
-    )
-    print(f"Dummy problem file saved as {filename}")
-
-
+# ------------------------------------------------------------------
+# Naive rollout: stepping the environment in a Python loop.
+# ------------------------------------------------------------------
 def naive_rollout(env, params, key, num_steps=1000):
-    """
-    Naive Python loop that steps the environment each time.
-    """
     obs, state = env.reset_env(key, params)
     start_time = time.time()
     steps = 0
 
     for _ in range(num_steps):
-        # Random action from Python/numpy
+        # Sample a random action using numpy.
+        import numpy as np
         action = np.random.randint(0, env.num_actions)
         key, subkey = jax.random.split(key)
         obs, state, reward, done, info = env.step_env(subkey, state, action, params)
@@ -51,27 +27,21 @@ def naive_rollout(env, params, key, num_steps=1000):
     print(f"[Naive loop] Executed {steps} steps in {elapsed:.4f} seconds.")
     return steps, elapsed
 
-
 # ------------------------------------------------------------------
 # JIT-friendly versions of the step logic.
 # We pass the environment arrays and constants as arguments.
 # ------------------------------------------------------------------
-
 @jax.jit
 def step_env_jitted(
-        transitions,
-        rewards,
-        screens,
-        screen_mapping,
-        TERMINAL_STATE,
-        state: TabularState,
-        action: jnp.int32,
-        params: TabularEnvParams,
+    transitions,
+    rewards,
+    screens,
+    screen_mapping,
+    TERMINAL_STATE,
+    state: TabularState,
+    action: jnp.int32,
+    params: TabularEnvParams,
 ):
-    """
-    A JIT-compatible version of the step logic.
-    """
-
     def if_done_fn(_):
         obs = get_obs_jitted(screens, screen_mapping, state.state_idx, params)
         reward = jnp.float32(0.0)
@@ -80,21 +50,17 @@ def step_env_jitted(
     def if_not_done_fn(_):
         next_state_idx = transitions[state.state_idx, action]
         reward = rewards[state.state_idx, action]
-
         new_steps = state.steps + 1
         done_by_terminal = (next_state_idx == TERMINAL_STATE)
         done_by_horizon = (new_steps >= params.horizon)
         done_by_reward = (reward != 0) & (params.done_on_reward)
         done_new = done_by_terminal | done_by_horizon | done_by_reward
 
-        # If horizon ended (and not terminal), add no_done_reward
         reward += jnp.where(
             done_by_horizon & ~done_by_terminal,
             jnp.float32(params.no_done_reward),
             jnp.float32(0.0),
         )
-
-        # Freeze the state_idx if done
         next_state_idx = jnp.where(done_new, state.state_idx, next_state_idx)
         next_state = TabularState(
             state_idx=next_state_idx,
@@ -110,24 +76,13 @@ def step_env_jitted(
     )
     return obs, next_state, reward, done_new
 
-
 @jax.jit
-def get_obs_jitted(
-        screens,
-        screen_mapping,
-        state_idx: jnp.int32,
-        params: TabularEnvParams,
-):
-    """
-    Return either a screen image or a [state_idx] as a JAX array.
-    """
+def get_obs_jitted(screens, screen_mapping, state_idx: jnp.int32, params: TabularEnvParams):
     if params.use_screen_observations and (screens is not None):
         def valid_screen_fn(idx):
             return screens[screen_mapping[idx]]
-
         def invalid_screen_fn(_):
             return jnp.zeros(screens.shape[1:], dtype=jnp.uint8)
-
         return jax.lax.cond(
             (state_idx >= 0) & (state_idx < screens.shape[0]),
             valid_screen_fn,
@@ -137,22 +92,17 @@ def get_obs_jitted(
     else:
         return jnp.array([state_idx], dtype=jnp.float32)
 
-
 @jax.jit
 def run_steps_jit(
-        transitions,
-        rewards,
-        screens,
-        screen_mapping,
-        TERMINAL_STATE,
-        initial_state,
-        action_seq,
-        params
+    transitions,
+    rewards,
+    screens,
+    screen_mapping,
+    TERMINAL_STATE,
+    initial_state,
+    action_seq,
+    params
 ):
-    """
-    Run the environment for len(action_seq) steps using a single jax.lax.scan.
-    """
-
     def scan_fn(carry, action):
         state = carry
         obs, next_state, reward, done = step_env_jitted(
@@ -166,25 +116,19 @@ def run_steps_jit(
             params
         )
         return next_state, (obs, reward, done)
-
+    
     final_state, (obs_seq, rew_seq, done_seq) = jax.lax.scan(
         scan_fn, initial_state, action_seq
     )
     return final_state, (obs_seq, rew_seq, done_seq)
 
-
 def jit_rollout(env, params, key, num_steps=1000):
-    """
-    A JIT-compiled rollout that performs all steps in a single device call.
-    """
-    # Reset once
+    # Reset once.
     obs, state = env.reset_env(key, params)
-
-    # Create a batch of random actions in JAX
+    # Create a batch of random actions in JAX.
     key, subkey = jax.random.split(key)
     actions = jax.random.randint(subkey, shape=(num_steps,), minval=0, maxval=env.num_actions)
 
-    # Run the rollout via jax.lax.scan.
     start_time = time.time()
     final_state, (obs_seq, rew_seq, done_seq) = run_steps_jit(
         env.transitions,
@@ -202,35 +146,34 @@ def jit_rollout(env, params, key, num_steps=1000):
     print(f"[JIT scan] Executed {num_steps} steps in {elapsed:.4f} seconds.")
     return num_steps, elapsed, final_state, obs_seq, rew_seq, done_seq
 
-
 def main():
-    # 1) Create dummy data
-    problem_file = "dummy_problem.npz"
-    create_dummy_problem_file(problem_file)
+    # Specify the NPZ file you already have.
+    problem_file = "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz"
+    if not os.path.exists(problem_file):
+        print(f"Problem file not found: {problem_file}")
+        return
 
-    # 2) Instantiate environment and params
+    # Instantiate the environment and parameters.
     env = TabularEnv(problem_file)
     params = env.default_params()
-
-    # 3) Create a random key
+    
+    # Create a random key.
     key = jax.random.PRNGKey(0)
 
-    # 4) Naive Python stepping
+    # Run the naive (Python loop) rollout.
     naive_steps, naive_time = naive_rollout(env, params, key, num_steps=1000)
-
-    # 5) JIT-compiled stepping
+    
+    # Run the JIT-compiled rollout.
     jit_steps, jit_time, final_state, obs_seq, rew_seq, done_seq = jit_rollout(env, params, key, num_steps=1000)
 
     print("Final state from JIT run:", final_state)
     if params.use_screen_observations and env.screens is not None:
-        print("obs_seq shape (JIT):", obs_seq.shape)  # e.g. (num_steps, 64, 64, 3)
+        print("obs_seq shape (JIT):", obs_seq.shape)
     else:
         print("obs_seq shape (JIT):", obs_seq.shape)
 
-    # 6) Print speed comparison
     speedup = naive_time / jit_time if jit_time > 0 else float("inf")
     print(f"Speedup: ~{speedup:.2f}x faster using JIT.")
-
 
 if __name__ == "__main__":
     main()
