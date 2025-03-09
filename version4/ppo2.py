@@ -403,7 +403,7 @@ if __name__ == "__main__":
         "LR": 2.5e-4,
         "NUM_ENVS": 4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 1e7,
+        "TOTAL_TIMESTEPS": 1e5,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
 
@@ -419,7 +419,7 @@ if __name__ == "__main__":
         # Choose "CartPole-v1" or your "TabularMDP"
         "ENV_NAME": "TabularMDP",
         # If using TabularMDP with screens, specify the .npz file
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/atlantis_10_fs30/consolidated.npz",
+        "ENV_FILE": "test.npz",
 
         # LR schedule
         "ANNEAL_LR": True,
@@ -448,24 +448,61 @@ if __name__ == "__main__":
     # By default, LogWrapper keeps track of "returned_episode_returns". We can average them.
 
     # Convert from device to host numpy
-    metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
+    # metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
+    #
+    # # The LogWrapper typically logs:
+    # #   metrics["returned_episode_returns"] of shape [NUM_STEPS, NUM_ENVS, ...]
+    # # or something similar. We'll do a mean across envs per step.
+    # if "returned_episode_returns" in metrics:
+    #     try:
+    #         mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
+    #     except Exception:
+    #         mean_returns = metrics["returned_episode_returns"]
+    #
+    #     mean_returns = mean_returns.reshape(-1)  # flatten if it has an extra dimension
+    #
+    #     # 4) Log to wandb each step
+    #     for i, ret in enumerate(mean_returns):
+    #         wandb.log({"update_step": i, "mean_return": ret})
+    #
+    #     # 5) Also log a plot of these returns
+    #     plt.figure()
+    #     plt.plot(mean_returns, label="Mean Return")
+    #     plt.xlabel("Update Step")
+    #     plt.ylabel("Return")
+    #     plt.title("PPO Training Performance")
+    #     plt.legend()
+    #     plt.tight_layout()
+    #     wandb.log({"training_returns_plot": wandb.Image(plt)})
+    #     plt.show()
+    #
+    # # 6) Finish the wandb run
+    # wandb.finish()
 
-    # The LogWrapper typically logs:
-    #   metrics["returned_episode_returns"] of shape [NUM_STEPS, NUM_ENVS, ...]
-    # or something similar. We'll do a mean across envs per step.
+    # Faster logging
+    # Convert entire metrics pytree to host arrays in one go:
+    metrics = jax.device_get(out["metrics"])
+
+    # For instance, if you only need to log every 10th update:
     if "returned_episode_returns" in metrics:
         try:
             mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
         except Exception:
             mean_returns = metrics["returned_episode_returns"]
+        mean_returns = mean_returns.reshape(-1)
 
-        mean_returns = mean_returns.reshape(-1)  # flatten if it has an extra dimension
+        # Subsample (e.g. every 10th update)
+        subsample = 10
+        subsampled_steps = np.arange(0, len(mean_returns), subsample)
+        subsampled_returns = mean_returns[::subsample]
 
-        # 4) Log to wandb each step
-        for i, ret in enumerate(mean_returns):
-            wandb.log({"update_step": i, "mean_return": ret})
+        # Log the entire subsampled array in one call
+        wandb.log({
+            "update_steps": subsampled_steps,
+            "mean_returns": subsampled_returns,
+        })
 
-        # 5) Also log a plot of these returns
+        # Plot and log the figure in one go
         plt.figure()
         plt.plot(mean_returns, label="Mean Return")
         plt.xlabel("Update Step")
@@ -476,5 +513,3 @@ if __name__ == "__main__":
         wandb.log({"training_returns_plot": wandb.Image(plt)})
         plt.show()
 
-    # 6) Finish the wandb run
-    wandb.finish()
