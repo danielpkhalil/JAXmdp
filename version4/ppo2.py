@@ -1,10 +1,17 @@
 """
-ppo_tabular_wandb_cnn_universal_debug_batchdim.py
+ppo_tabular_wandb_cnn.py
 
-Key differences:
-- We always init the network with shape (1, H, W, C).
-- We always pass (N, H, W, C) to the CNN at train time.
-- Includes debug prints to see shapes.
+Usage:
+    1) Make sure you have a local "gymnax_env.py" that defines
+       TabularEnv and TabularEnvParams (with screen observations).
+    2) pip install wandb
+    3) python ppo_tabular_wandb_cnn.py
+
+This script:
+    - Uses PPO training
+    - Automatically picks a CNN if the environment observations are images,
+      and an MLP otherwise.
+    - Logs results to Weights & Biases
 """
 
 import jax
@@ -12,75 +19,108 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import optax
-import wandb   # for logging
+import wandb
 
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from typing import NamedTuple, Any
+from typing import Sequence, NamedTuple, Any, Tuple
 
 import distrax
 import gymnax
-from gymnax.wrappers.purerl import LogWrapper
+from gymnax.wrappers.purerl import FlattenObservationWrapper, LogWrapper
 
-# If you have a custom env:
+# Import your custom environment:
 from gymnax_env import TabularEnv, TabularEnvParams
 
 import matplotlib.pyplot as plt
 
+
 # ------------------------------
-# CNN-based Actor-Critic
+# CNN Actor-Critic
 # ------------------------------
-class ActorCritic(nn.Module):
+class CNNActorCritic(nn.Module):
+    """
+    A small CNN for image observations. It ends with a flatten, then a final MLP layer
+    to produce policy logits and value.
+    """
     action_dim: int
+    activation: str = "relu"
+
+    def setup(self):
+        if self.activation == "relu":
+            self.activation_fn = nn.relu
+        else:
+            self.activation_fn = nn.tanh
 
     @nn.compact
     def __call__(self, x):
         """
-        Expects x shape: (batch, H, W, C).
-        Example steps: 2 Convs (stride=2), global avg pool, 1 Dense, policy & value heads.
+        x shape: (batch, H, W, C), uint8 in [0..255]
+        We'll normalize by 255.0, do a couple of conv layers, then flatten and produce heads.
         """
-        # Conv #1
-        x = nn.Conv(
-            features=32, kernel_size=(3,3), strides=(2,2),
-            kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
-        x = nn.relu(x)
+        # Normalize
+        x = x.astype(jnp.float32) / 255.0
 
-        # Conv #2
-        x = nn.Conv(
-            features=64, kernel_size=(3,3), strides=(2,2),
-            kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
-        x = nn.relu(x)
+        # Convolutional feature extraction
+        x = nn.Conv(features=16, kernel_size=(3, 3), strides=(2, 2),
+                    kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        x = self.activation_fn(x)
+        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2),
+                    kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        x = self.activation_fn(x)
 
-        # Global average pooling: reduce (H, W) => just keep channels
-        x = x.mean(axis=(1, 2))  # shape: (batch, 64)
+        # Flatten
+        x = x.reshape((x.shape[0], -1))
 
-        # Dense layer
-        x = nn.Dense(
-            features=64,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(x)
-        x = nn.relu(x)
+        # Optional fully-connected layer
+        x = nn.Dense(features=256, kernel_init=orthogonal(np.sqrt(2)),
+                     bias_init=constant(0.0))(x)
+        x = self.activation_fn(x)
 
         # Policy head
-        logits = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
-        )(x)
-        pi = distrax.Categorical(logits=logits)
+        actor_logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01),
+                                bias_init=constant(0.0))(x)
+        pi = distrax.Categorical(logits=actor_logits)
 
         # Value head
-        critic = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
-            bias_init=constant(0.0),
-        )(x)
-        value = jnp.squeeze(critic, axis=-1)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(x)
+        return pi, jnp.squeeze(critic, axis=-1)
 
-        return pi, value
+
+# ------------------------------
+# MLP Actor-Critic
+# ------------------------------
+class MLPActorCritic(nn.Module):
+    """Actor-critic model for 1D (non-image) discrete action spaces."""
+    action_dim: int
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, x):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        # Flatten if needed (e.g., shape (batch, 1))
+        x = x.reshape((x.shape[0], -1))
+
+        # Policy
+        actor_mean = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor_mean)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
+        # Value function
+        critic = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        critic = activation(critic)
+        critic = nn.Dense(64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(critic)
+        critic = activation(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+
+        return pi, jnp.squeeze(critic, axis=-1)
 
 
 # ------------------------------
@@ -95,26 +135,39 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
+
 # ------------------------------
-# Training
+# Main Training Function
 # ------------------------------
 def make_train(config):
+    # How many total updates:
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
+
+    # Minibatch size:
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    # 1) Create env
+    # 1) CREATE ENVIRONMENT (TabularEnv or regular Gymnax)
     if config["ENV_NAME"] == "TabularMDP":
         env = TabularEnv(config["ENV_FILE"])
         env_params = env.default_params()
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
+
+    # Because we only care about TabularEnv with screens, we won't do anything
+    # fancy for other Gymnax envs. But if 'ENV_NAME' is CartPole, it might still
+    # use the MLP version.
+
+    # Apply wrappers
+    # FlattenObservationWrapper is actually optional if you want to keep image shape
+    # for TabularEnv with screen observations, so let's comment it out if you prefer
+    # env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
 
-    # 2) LR schedule
+    # 2) Learning rate schedule
     def linear_schedule(count):
         frac = (
             1.0
@@ -123,23 +176,27 @@ def make_train(config):
         )
         return config["LR"] * frac
 
-    # 3) train function
+    # 3) TRAIN FUNCTION
     def train(rng):
-        network = ActorCritic(action_dim=env.action_space(env_params).n)
+        # Figure out the shape of the observations from the environment
+        obs_shape = env.observation_space(env_params).shape
+        action_dim = env.action_space(env_params).n
+
+        # Decide if we use CNN or MLP
+        # If the obs shape is 3D (e.g. H, W, C), we'll assume they're images
+        if len(obs_shape) == 3:
+            network = CNNActorCritic(action_dim=action_dim,
+                                     activation=config["ACTIVATION"])
+        else:
+            network = MLPActorCritic(action_dim=action_dim,
+                                     activation=config["ACTIVATION"])
+
+        # Initialize network parameters
         rng, init_rng = jax.random.split(rng)
-
-        # We ALWAYS init with shape (1, H, W, C) to include a batch dimension.
-        obs_shape = env.observation_space(env_params).shape  # (H, W, C)
-        if config["DEBUG"]:
-            print("DEBUG: env.observation_space shape =", obs_shape)
-
-        init_obs = jnp.zeros((1,) + obs_shape)  # batch=1
-        if config["DEBUG"]:
-            print("DEBUG: init_obs shape for init =", init_obs.shape)
-
+        init_obs = jnp.zeros((1,) + obs_shape, dtype=jnp.uint8)  # match env dtype if it's images
         network_params = network.init(init_rng, init_obs)
 
-        # optimizer
+        # Define optimizer
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -150,41 +207,26 @@ def make_train(config):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["LR"], eps=1e-5),
             )
+
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
             tx=tx,
         )
 
-        # Env init
+        # INIT ENV
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
-        # obsv shape => (NUM_ENVS, H, W, C)
 
-        # Optional debug pass
-        if config["DEBUG"]:
-            print("DEBUG: real initial obsv shape =", obsv.shape)
-            # single batch
-            single_obs = obsv[:1]  # shape (1, H, W, C)
-            print("DEBUG: single_obs shape for debug =", single_obs.shape)
-
-            pi_debug, val_debug = network.apply(train_state.params, single_obs)
-            print("DEBUG: pi_debug.logits shape =", pi_debug.logits.shape,
-                  " val_debug.shape =", val_debug.shape)
-
-        # -----------
-        # SCAN
-        # -----------
+        # SCAN: Update Steps
         def _update_step(runner_state, _):
             train_state, env_state, last_obs, rng = runner_state
 
-            # 1) gather rollout
+            # 1) Collect a rollout
             def _env_step(runner_state, _):
                 train_state, env_state, last_obs, rng = runner_state
                 rng, act_rng = jax.random.split(rng)
-
-                # pass entire batch (N, H, W, C)
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=act_rng)
                 log_prob = pi.log_prob(action)
@@ -196,24 +238,17 @@ def make_train(config):
                 )(step_rngs, env_state, action, env_params)
 
                 transition = Transition(
-                    done=done,
-                    action=action,
-                    value=value,
-                    reward=reward,
-                    log_prob=log_prob,
-                    obs=last_obs,
-                    info=info,
+                    done, action, value, reward, log_prob, last_obs, info
                 )
                 runner_state = (train_state, env_state, obsv, rng)
                 return runner_state, transition
 
             runner_state, traj_batch = jax.lax.scan(
-                _env_step, (train_state, env_state, last_obs, rng),
-                None, config["NUM_STEPS"]
+                _env_step, (train_state, env_state, last_obs, rng), None, config["NUM_STEPS"]
             )
             train_state, env_state, last_obs, rng = runner_state
 
-            # 2) GAE advantage
+            # 2) Compute advantage (GAE)
             _, last_val = network.apply(train_state.params, last_obs)
 
             def _calculate_gae(traj_batch, last_val):
@@ -291,13 +326,12 @@ def make_train(config):
 
                 train_state, traj_batch, advantages, targets, rng = update_state
 
-                # Shuffle entire trajectory
+                # Shuffle the entire trajectory for minibatches
                 rng, perm_rng = jax.random.split(rng)
                 batch_size = config["NUM_STEPS"] * config["NUM_ENVS"]
                 permutation = jax.random.permutation(perm_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
-
-                # Flatten from [T, N_env, ...] to [T*N_env, ...]
+                # Flatten from [T, N_env, ...] -> [T*N_env, ...]
                 batch = jax.tree_util.tree_map(
                     lambda x: x.reshape((batch_size,) + x.shape[2:]),
                     batch,
@@ -307,7 +341,7 @@ def make_train(config):
                     lambda x: jnp.take(x, permutation, axis=0),
                     batch,
                 )
-                # Reshape -> minibatches
+                # Reshape into minibatches
                 minibatches = jax.tree_util.tree_map(
                     lambda x: jnp.reshape(
                         x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])
@@ -315,7 +349,7 @@ def make_train(config):
                     shuffled,
                 )
 
-                # Scan minibatches
+                # Scan over minibatches
                 train_state, losses = jax.lax.scan(
                     _update_minibatch, train_state, minibatches
                 )
@@ -332,7 +366,7 @@ def make_train(config):
 
             metric = traj_batch.info
 
-            # debug callback
+            # Debug prints if requested
             if config.get("DEBUG"):
                 def debug_callback(info):
                     rets = info["returned_episode_returns"][info["returned_episode"]]
@@ -344,7 +378,7 @@ def make_train(config):
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
 
-        # run entire training
+        # Run the entire training
         rng, train_rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, train_rng)
         runner_state, metrics = jax.lax.scan(
@@ -360,47 +394,78 @@ def make_train(config):
 
 
 # ------------------------------
-# Entry Point
+# ENTRY POINT
 # ------------------------------
 if __name__ == "__main__":
+    # Define your config
     config = {
+        # PPO hyperparams
         "LR": 2.5e-4,
         "NUM_ENVS": 4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 5e3,
+        "TOTAL_TIMESTEPS": 1e4,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
+
+        # PPO constants
         "GAMMA": 0.99,
         "GAE_LAMBDA": 0.95,
         "CLIP_EPS": 0.2,
         "ENT_COEF": 0.01,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
-        "ANNEAL_LR": True,
-        "DEBUG": True,  # turn on shape debugging
+        "ACTIVATION": "relu",  # or "tanh"
+
+        # Choose "CartPole-v1" or your "TabularMDP"
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
+        # If using TabularMDP with screens, specify the .npz file
+        "ENV_FILE": "test.npz",
+
+        # LR schedule
+        "ANNEAL_LR": True,
+
+        # Debug
+        "DEBUG": False,
     }
 
-    wandb.init(project="my_tabular_ppo_cnn_batchdim_debug", config=config)
+    # 1) Initialize wandb logging
+    wandb.init(
+        project="my_tabular_ppo_cnn",  # project name on wandb
+        config=config,                 # store hyperparams in wandb
+    )
+
     rng = jax.random.PRNGKey(42)
 
+    # 2) Create the train function & JIT it
     train_fn = make_train(config)
     train_jit = jax.jit(train_fn)
 
+    # 3) Run training
     out = train_jit(rng)
     print("Training finished. Final output keys:", out.keys())
 
-    metrics = jax.tree_util.tree_map(np.array, out["metrics"])
+    # out["metrics"] is a pytree that includes the 'info' logs from the last transitions
+    # By default, LogWrapper keeps track of "returned_episode_returns". We can average them.
+
+    # Convert from device to host numpy
+    metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
+
+    # The LogWrapper typically logs:
+    #   metrics["returned_episode_returns"] of shape [NUM_STEPS, NUM_ENVS, ...]
+    # or something similar. We'll do a mean across envs per step.
     if "returned_episode_returns" in metrics:
         try:
             mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
-        except:
+        except Exception:
             mean_returns = metrics["returned_episode_returns"]
-        mean_returns = mean_returns.reshape(-1)
+
+        mean_returns = mean_returns.reshape(-1)  # flatten if it has an extra dimension
+
+        # 4) Log to wandb each step
         for i, ret in enumerate(mean_returns):
             wandb.log({"update_step": i, "mean_return": ret})
 
+        # 5) Also log a plot of these returns
         plt.figure()
         plt.plot(mean_returns, label="Mean Return")
         plt.xlabel("Update Step")
@@ -411,4 +476,5 @@ if __name__ == "__main__":
         wandb.log({"training_returns_plot": wandb.Image(plt)})
         plt.show()
 
+    # 6) Finish the wandb run
     wandb.finish()
