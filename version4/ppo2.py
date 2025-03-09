@@ -481,38 +481,65 @@ if __name__ == "__main__":
 
     # Faster logging
     # Convert entire metrics pytree to host arrays in one go:
-    metrics = jax.device_get(out["metrics"])
+    # metrics = jax.device_get(out["metrics"])
 
-    # For instance, if you only need to log every 10th update:
-    if "returned_episode_returns" in metrics:
-        try:
-            mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
-        except Exception:
-            mean_returns = metrics["returned_episode_returns"]
-        mean_returns = mean_returns.reshape(-1)
+    # # For instance, if you only need to log every 10th update:
+    # if "returned_episode_returns" in metrics:
+    #     try:
+    #         mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
+    #     except Exception:
+    #         mean_returns = metrics["returned_episode_returns"]
+    #     mean_returns = mean_returns.reshape(-1)
 
-        # Subsample (e.g. every 10th update)
-        print("Subsampling")
-        subsample = 10
-        subsampled_steps = np.arange(0, len(mean_returns), subsample)
-        subsampled_returns = mean_returns[::subsample]
+    #     # Subsample (e.g. every 10th update)
+    #     print("Subsampling")
+    #     subsample = 10
+    #     subsampled_steps = np.arange(0, len(mean_returns), subsample)
+    #     subsampled_returns = mean_returns[::subsample]
 
-        # Log the entire subsampled array in one call
-        print("Logging to wandb")
-        wandb.log({
-            "update_steps": subsampled_steps,
-            "mean_returns": subsampled_returns,
-        })
+    #     # Log the entire subsampled array in one call
+    #     print("Logging to wandb")
+    #     wandb.log({
+    #         "update_steps": subsampled_steps,
+    #         "mean_returns": subsampled_returns,
+    #     })
 
-        # Plot and log the figure in one go
-        print("matplotlibing")
-        plt.figure()
-        plt.plot(mean_returns, label="Mean Return")
-        plt.xlabel("Update Step")
-        plt.ylabel("Return")
-        plt.title("PPO Training Performance")
-        plt.legend()
-        plt.tight_layout()
-        wandb.log({"training_returns_plot": wandb.Image(plt)})
-        plt.show()
+    #     # Plot and log the figure in one go
+    #     print("matplotlibing")
+    #     plt.figure()
+    #     plt.plot(mean_returns, label="Mean Return")
+    #     plt.xlabel("Update Step")
+    #     plt.ylabel("Return")
+    #     plt.title("PPO Training Performance")
+    #     plt.legend()
+    #     plt.tight_layout()
+    #     wandb.log({"training_returns_plot": wandb.Image(plt)})
+    #     plt.show()
+
+    # Even faster logging
+    # Only extract the key(s) we need for logging.
+    logging_keys = ["returned_episode_returns"]
+    logging_info = {k: out["metrics"][k] for k in logging_keys if k in out["metrics"]}
+    
+    # Transfer only that smaller dictionary from device to host.
+    logging_info = jax.device_get(logging_info)
+    
+    # Now, use the transferred logging_info:
+    try:
+        mean_returns = logging_info["returned_episode_returns"].mean(axis=-1)
+    except Exception:
+        mean_returns = logging_info["returned_episode_returns"]
+    mean_returns = mean_returns.reshape(-1)  # flatten if needed
+    
+    # Log a summary in one call.
+    log_dict = {
+        "update_steps": np.arange(len(mean_returns)),
+        "mean_returns": mean_returns,
+        "final_mean_return": float(mean_returns[-1]),
+        "min_return": float(np.min(mean_returns)),
+        "max_return": float(np.max(mean_returns)),
+        "avg_return": float(np.mean(mean_returns)),
+    }
+    wandb.log(log_dict)
+
 
