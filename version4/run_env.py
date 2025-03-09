@@ -268,9 +268,9 @@ def main():
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
         # Choose "CartPole-v1" (or "TabularMDP" if desired)
-        "ENV_NAME": "CartPole-v1",
+        "ENV_NAME": "TabularMDP",
         # If using TabularMDP, specify the .npz file (ignored for CartPole)
-        "ENV_FILE": "path/to/your/env_file.npz",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
         # LR schedule flag
         "ANNEAL_LR": True,
         # Debug flag
