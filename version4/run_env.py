@@ -6,9 +6,7 @@ This script benchmarks two things on the CartPole-v1 environment:
 2. Just iterating through the environment with random actions
 
 It also logs a reward plot from the PPO training (using LogWrapper) to wandb.
-The goal is to compare how much extra time the PPO training computations add
-over the bare-bones environment stepping, and to verify that the env is iterating fast.
-
+Extra print/debug statements have been added so you can see what is taking time.
 Usage:
     pip install jax jaxlib gymnax flax optax wandb distrax matplotlib
     python ppo_vs_env_benchmark.py
@@ -29,7 +27,6 @@ from flax.training.train_state import TrainState
 from gymnax.wrappers.purerl import FlattenObservationWrapper, LogWrapper
 
 # Import your custom environment if needed (for TabularMDP)
-# For CartPole, gymnax.make is used.
 from gymnax_env import TabularEnv, TabularEnvParams  # adjust or remove if not using TabularMDP
 
 # ------------------------------
@@ -77,7 +74,7 @@ class Transition(NamedTuple):
 
 
 # ------------------------------
-# PPO Training Function (same as your PPO code)
+# PPO Training Function (same as your PPO code, with extra prints)
 # ------------------------------
 def make_train(config):
     # Compute number of update steps and minibatch size
@@ -101,6 +98,9 @@ def make_train(config):
         return config["LR"] * frac
 
     def train(rng):
+        # DEBUG: Starting training function
+        jax.debug.print(">> Starting training function at time: {}", time.time())
+
         # Initialize network
         network = ActorCritic(
             action_dim=env.action_space(env_params).n,
@@ -109,6 +109,7 @@ def make_train(config):
         rng, init_rng = jax.random.split(rng)
         init_obs = jnp.zeros(env.observation_space(env_params).shape)
         network_params = network.init(init_rng, init_obs)
+        jax.debug.print(">> Network initialized at time: {}", time.time())
 
         # Define optimizer
         if config["ANNEAL_LR"]:
@@ -122,15 +123,18 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
         train_state = TrainState.create(apply_fn=network.apply, params=network_params, tx=tx)
+        jax.debug.print(">> Optimizer and train state created at time: {}", time.time())
 
         # Initialize environment
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
+        jax.debug.print(">> Environment reset complete at time: {}", time.time())
 
         # Main update loop
         def _update_step(runner_state, _):
             train_state, env_state, last_obs, rng = runner_state
+            jax.debug.print(">> Starting an update step at time: {}", time.time())
 
             # Rollout collection
             def _env_step(runner_state, _):
@@ -152,6 +156,7 @@ def make_train(config):
                 _env_step, (train_state, env_state, last_obs, rng), None, config["NUM_STEPS"]
             )
             train_state, env_state, last_obs, rng = runner_state
+            jax.debug.print(">> Rollout collection complete at time: {}", time.time())
 
             # Compute advantage (GAE)
             _, last_val = network.apply(train_state.params, last_obs)
@@ -169,6 +174,7 @@ def make_train(config):
                 returns = advantages + traj_batch.value
                 return advantages, returns
             advantages, targets = _calculate_gae(traj_batch, last_val)
+            jax.debug.print(">> Advantage computation complete at time: {}", time.time())
 
             # PPO Update (minibatch updates)
             def _update_epoch(update_state, _):
@@ -211,24 +217,28 @@ def make_train(config):
             train_state = update_state[0]
             rng = update_state[-1]
             metric = traj_batch.info
+            jax.debug.print(">> PPO update complete at time: {}", time.time())
             return (train_state, env_state, last_obs, rng), metric
 
         rng, train_rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, train_rng)
+        jax.debug.print(">> Beginning main training loop at time: {}", time.time())
         runner_state, metrics = jax.lax.scan(_update_step, runner_state, None, config["NUM_UPDATES"])
+        jax.debug.print(">> Finished main training loop at time: {}", time.time())
         return {"runner_state": runner_state, "metrics": metrics}
 
     return train
 
 
 # ------------------------------
-# Baseline: Environment Iteration Function
+# Baseline: Environment Iteration Function (with print statements)
 # ------------------------------
 def env_iteration(rng, env, env_params, num_steps, num_envs):
-    # Reset environment(s)
+    print(">> Starting environment iteration at time:", time.time())
     rng, reset_rng = jax.random.split(rng)
     reset_rngs = jax.random.split(reset_rng, num_envs)
     obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
+    print(">> Environment reset for baseline complete at time:", time.time())
 
     def step_fn(carry, _):
         env_state, last_obs, rng = carry
@@ -243,11 +253,12 @@ def env_iteration(rng, env, env_params, num_steps, num_envs):
         return (env_state, obsv, rng), None
 
     (env_state, last_obs, rng), _ = jax.lax.scan(step_fn, (env_state, obsv, rng), None, num_steps)
+    print(">> Finished environment iteration at time:", time.time())
     return last_obs, env_state
 
 
 # ------------------------------
-# Main Benchmark Routine
+# Main Benchmark Routine (with print statements)
 # ------------------------------
 def main():
     # Configuration (adjust TOTAL_TIMESTEPS as needed)
@@ -256,7 +267,7 @@ def main():
         "LR": 2.5e-4,
         "NUM_ENVS": 4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 100,   # total timesteps across all envs
+        "TOTAL_TIMESTEPS": 100,   # total timesteps across all envs (use a small number for debugging)
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
         # PPO constants
@@ -277,15 +288,17 @@ def main():
         "DEBUG": False,
     }
 
-    # Initialize wandb logging for PPO (and benchmarking)
+    print(">> Initializing wandb at time:", time.time())
     wandb.init(project="ppo_vs_env_benchmark", config=config, reinit=True)
 
     # ------------------------------
     # Benchmark PPO Training
     # ------------------------------
     rng = jax.random.PRNGKey(42)
+    print(">> Creating PPO train function at time:", time.time())
     ppo_train_fn = make_train(config)
     ppo_train_jit = jax.jit(ppo_train_fn)
+    print(">> Starting PPO training (jitted) at time:", time.time())
     start_time = time.time()
     out = ppo_train_jit(rng)
     ppo_time = time.time() - start_time
@@ -323,11 +336,10 @@ def main():
         env, env_params = gymnax.make(config["ENV_NAME"])
     env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
-    # Calculate number of update loops used in PPO training
     num_updates = config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     total_env_steps = num_updates * config["NUM_STEPS"]
 
-    # JIT compile the env iteration function
+    print(">> Starting baseline environment iteration at time:", time.time())
     baseline_fn = jax.jit(lambda rng: env_iteration(rng, env, env_params, total_env_steps, config["NUM_ENVS"]))
     rng_baseline = jax.random.PRNGKey(123)
     start_time = time.time()
