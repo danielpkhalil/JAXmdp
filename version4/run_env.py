@@ -5,8 +5,9 @@ This script benchmarks two things on the CartPole-v1 environment:
 1. Running PPO training (using your PPO code that logs to wandb)
 2. Just iterating through the environment with random actions
 
+It also logs a reward plot from the PPO training (using LogWrapper) to wandb.
 The goal is to compare how much extra time the PPO training computations add
-over the bare-bones environment stepping.
+over the bare-bones environment stepping, and to verify that the env is iterating fast.
 
 Usage:
     pip install jax jaxlib gymnax flax optax wandb distrax matplotlib
@@ -79,7 +80,7 @@ class Transition(NamedTuple):
 # PPO Training Function (same as your PPO code)
 # ------------------------------
 def make_train(config):
-    # Compute number of update steps
+    # Compute number of update steps and minibatch size
     config["NUM_UPDATES"] = config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     config["MINIBATCH_SIZE"] = config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
 
@@ -90,6 +91,7 @@ def make_train(config):
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
+    # Apply wrappers
     env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
 
@@ -248,7 +250,7 @@ def env_iteration(rng, env, env_params, num_steps, num_envs):
 # Main Benchmark Routine
 # ------------------------------
 def main():
-    # Configuration (same as your PPO script; adjust TOTAL_TIMESTEPS as needed)
+    # Configuration (adjust TOTAL_TIMESTEPS as needed)
     config = {
         # PPO hyperparameters
         "LR": 2.5e-4,
@@ -275,7 +277,7 @@ def main():
         "DEBUG": False,
     }
 
-    # Initialize wandb logging for PPO (can be omitted if not needed for benchmarking)
+    # Initialize wandb logging for PPO (and benchmarking)
     wandb.init(project="ppo_vs_env_benchmark", config=config, reinit=True)
 
     # ------------------------------
@@ -283,12 +285,33 @@ def main():
     # ------------------------------
     rng = jax.random.PRNGKey(42)
     ppo_train_fn = make_train(config)
-    # JIT compile the train function
     ppo_train_jit = jax.jit(ppo_train_fn)
     start_time = time.time()
-    _ = ppo_train_jit(rng)
+    out = ppo_train_jit(rng)
     ppo_time = time.time() - start_time
     print("PPO training finished. Time taken: {:.4f} seconds.".format(ppo_time))
+
+    # ------------------------------
+    # Plot and log rewards from PPO training
+    # ------------------------------
+    metrics = jax.tree_util.tree_map(lambda x: np.array(x), out["metrics"])
+    if "returned_episode_returns" in metrics:
+        try:
+            mean_returns = metrics["returned_episode_returns"].mean(axis=-1)
+        except Exception as e:
+            mean_returns = metrics["returned_episode_returns"]
+        mean_returns = mean_returns.reshape(-1)
+        for i, ret in enumerate(mean_returns):
+            wandb.log({"update_step": i, "mean_return": ret})
+        plt.figure()
+        plt.plot(mean_returns, label="Mean Return")
+        plt.xlabel("Update Step")
+        plt.ylabel("Return")
+        plt.title("PPO Training Performance")
+        plt.legend()
+        plt.tight_layout()
+        wandb.log({"training_returns_plot": wandb.Image(plt)})
+        plt.show()
 
     # ------------------------------
     # Benchmark Pure Environment Iteration
@@ -312,7 +335,7 @@ def main():
     baseline_time = time.time() - start_time
     print("Baseline env iteration finished. Time taken: {:.4f} seconds.".format(baseline_time))
 
-    # Log results to wandb and print a summary
+    # Log benchmark summary to wandb
     wandb.log({"ppo_time": ppo_time, "env_iteration_time": baseline_time})
     print("\n--- Benchmark Summary ---")
     print("PPO training time      : {:.4f} seconds".format(ppo_time))
