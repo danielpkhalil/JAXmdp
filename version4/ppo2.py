@@ -492,17 +492,20 @@ if __name__ == "__main__":
         mean_returns = mean_returns.reshape(-1)
 
         # Subsample (e.g. every 10th update)
+        print("Subsampling")
         subsample = 10
         subsampled_steps = np.arange(0, len(mean_returns), subsample)
         subsampled_returns = mean_returns[::subsample]
 
         # Log the entire subsampled array in one call
+        print("Logging to wandb")
         wandb.log({
             "update_steps": subsampled_steps,
             "mean_returns": subsampled_returns,
         })
 
         # Plot and log the figure in one go
+        print("matplotlibing")
         plt.figure()
         plt.plot(mean_returns, label="Mean Return")
         plt.xlabel("Update Step")
