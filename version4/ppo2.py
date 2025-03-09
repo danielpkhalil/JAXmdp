@@ -419,7 +419,7 @@ if __name__ == "__main__":
         # Choose "CartPole-v1" or your "TabularMDP"
         "ENV_NAME": "TabularMDP",
         # If using TabularMDP with screens, specify the .npz file
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-UnlockPickup-OpenDoorsPickupShaped-v0/consolidated.npz",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/atlantis_10_fs30/consolidated.npz",
 
         # LR schedule
         "ANNEAL_LR": True,
