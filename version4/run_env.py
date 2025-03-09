@@ -256,7 +256,7 @@ def main():
         "LR": 2.5e-4,
         "NUM_ENVS": 4,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 5e6,   # total timesteps across all envs
+        "TOTAL_TIMESTEPS": 100,   # total timesteps across all envs
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
         # PPO constants
