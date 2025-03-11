@@ -331,7 +331,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/demon_attack_10_fs30/consolidated.npz",  # Path to your .npz file
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/asterix_10_fs30/consolidated.npz",  # Path to your .npz file
         "REWARD_SCALE": 0.1,
         "EVAL_FREQUENCY": 1000,          # Evaluate every 1000 env steps
         "TRAIN_MEDIAN_WINDOW": 20,       # Window size for median training reward
