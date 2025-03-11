@@ -335,7 +335,7 @@ if __name__ == "__main__":
         "REWARD_SCALE": 0.1,
         "EVAL_FREQUENCY": 1000,          # Evaluate every 1000 env steps
         "TRAIN_MEDIAN_WINDOW": 20,       # Window size for median training reward
-        "OPTIMAL_REWARD": 50.0,          # Optimal reward threshold (after scaling)
+        "OPTIMAL_REWARD": 5.0,          # Optimal reward threshold (after scaling)
     }
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
