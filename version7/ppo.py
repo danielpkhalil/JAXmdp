@@ -316,7 +316,7 @@ def run_ppo_training(config):
 # ------------------------------
 if __name__ == "__main__":
     config = {
-        "SEED": 1,
+        "SEED": 0,
         "LR": 2.5e-4,
         "NUM_ENVS": 8,
         "NUM_STEPS": 128,
@@ -331,11 +331,11 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/atlantis_20_fs30/consolidated.npz",  # Path to your .npz file
-        "REWARD_SCALE": 1/100,
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/asterix_10_fs30/consolidated.npz",  # Path to your .npz file
+        "REWARD_SCALE": 1/50,
         "EVAL_FREQUENCY": 1000,          # Evaluate every 1000 env steps
         "TRAIN_MEDIAN_WINDOW": 20,       # Window size for median training reward
-        "OPTIMAL_REWARD": 12.0,          # Optimal reward threshold (after scaling)
+        "OPTIMAL_REWARD": 8.0,          # Optimal reward threshold (after scaling)
     }
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
