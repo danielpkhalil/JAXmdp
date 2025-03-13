@@ -30,7 +30,7 @@ def sanity_check():
     # Configuration for the environment.
     config = {
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "MiniGrid-DoorKey-5x5-DistanceShaped-v0.npz",  # update path as needed
+        "ENV_FILE": "atlantis_20_fs30.npz",  # update path as needed
         "REWARD_SCALE": 1,
         "MAX_STEPS": 10000,  # maximum steps per episode
         "PAUSE_DURATION": 1.0,  # seconds to pause between frames for visualization
@@ -76,7 +76,7 @@ def sanity_check():
     im = ax.imshow(np.array(obs))
     ax.set_title("Step 0")
     plt.show()
-    actions = [1,3,2,2,1,5,2,2,1,2,2]
+    actions = [1,3,2,2,1,5,2,2,1,2,2] + [0]*1000
     # Run an episode with random actions.
     for step in range(config["MAX_STEPS"]):
         rng, action_rng = jax.random.split(rng)

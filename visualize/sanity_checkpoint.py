@@ -1,25 +1,12 @@
-"""
-visualize_policy.py
-
-- Loads the checkpoint saved from training.
-- Runs one deterministic evaluation episode with the loaded policy.
-- Records and saves each observation frame to create a GIF of the policy rollout.
-
-Usage:
-    1) Ensure "gymnax_env.py" is in the same folder.
-    2) pip install imageio
-    3) python visualize_policy.py
-"""
-
 import os
 import jax
 import jax.numpy as jnp
 import numpy as np
 import gymnax
+import matplotlib.pyplot as plt
 import flax.linen as nn
 import distrax
 from flax.training import checkpoints
-import imageio
 
 # Import your custom environment
 from gymnax_env import TabularEnv, TabularEnvParams
@@ -79,9 +66,11 @@ def main():
         "ENV_NAME": "TabularMDP",
         "ENV_FILE": "atlantis_20_fs30.npz",
         "REWARD_SCALE": 1/100,
+        "PAUSE_DURATION": 0.1,  # adjust pause duration as needed for visualization speed
+        "MAX_STEPS": 100000,
     }
 
-    # 1) Create the environment (here using your custom TabularEnv)
+    # 1) Create the environment (using your custom TabularEnv)
     if config["ENV_NAME"] == "TabularMDP":
         env = TabularEnv(config["ENV_FILE"])
         env_params = env.default_params().replace(reward_scale=config["REWARD_SCALE"])
@@ -115,35 +104,44 @@ def main():
     if "params" in loaded_params:
         loaded_params = loaded_params["params"]
 
-    # 5) Run one deterministic evaluation episode, recording frames
-    frames = []
+    # 5) Reset the environment and set up matplotlib for interactive visualization.
     rng, reset_rng = jax.random.split(rng)
     obs, state = env.reset(reset_rng, env_params)
-    done = False
-    max_steps = 100000
+    plt.ion()  # Turn on interactive mode.
+    fig, ax = plt.subplots()
+    im = ax.imshow(np.array(obs))
+    ax.set_title("Step 0")
+    plt.show()
+
     steps = 0
     total_reward = 0
+    done = False
 
-    while (not done) and (steps < max_steps):
-        frame = np.array(obs)
-        frames.append(frame)
+    # 6) Run one deterministic evaluation episode while visualizing.
+    while (not done) and (steps < config["MAX_STEPS"]):
+        # Render the current observation.
+        im.set_data(np.array(obs))
+        ax.set_title(f"Step {steps} | Total Reward: {total_reward:.2f}")
+        fig.canvas.draw_idle()
+        plt.pause(config["PAUSE_DURATION"])
 
-        # Use the policy deterministically: choose the action with highest logit
+        # Choose the action with the highest logit.
         pi, _ = network.apply({"params": loaded_params}, obs[None, ...])
         action = int(jnp.argmax(pi.logits[0]))
+
+        # Step the environment.
         rng, step_rng = jax.random.split(rng)
         obs, state, reward, done, info = env.step(step_rng, state, action, env_params)
         total_reward += reward
         steps += 1
 
+        print(f"Step {steps} | Action: {action} | Reward: {reward:.2f} | Done: {done}")
+
     print(f"Policy rollout completed in {steps} steps.")
     print(f"Total reward: {total_reward}")
 
-    # 6) Save the recorded frames as a GIF with slower playback (1 frame per second)
-    imageio.mimsave('policy_rollout.gif', frames)
-    # Alternatively, use duration:
-    # imageio.mimsave('policy_rollout.gif', frames, duration=1.0)
-    print("Saved policy rollout GIF as policy_rollout.gif")
+    plt.ioff()  # Turn off interactive mode.
+    plt.show()  # Keep the final frame displayed.
 
 if __name__ == "__main__":
     main()

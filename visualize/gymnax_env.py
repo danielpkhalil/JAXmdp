@@ -133,6 +133,10 @@ class TabularEnv(environment.Environment):
             done_by_reward = (reward != 0) & (params.done_on_reward)
             done_new = done_by_terminal | done_by_horizon | done_by_reward
 
+            # Debug print of termination reasons.
+            jax.debug.print("Termination check: terminal={}; horizon={}; reward={}",
+                            done_by_terminal, done_by_horizon, done_by_reward)
+
             reward += jnp.where(
                 done_by_horizon & ~done_by_terminal,
                 jnp.float32(params.no_done_reward),

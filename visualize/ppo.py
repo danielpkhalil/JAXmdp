@@ -328,7 +328,7 @@ if __name__ == "__main__":
         "LR": 2.5e-4,
         "NUM_ENVS": 8,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 1e5,
+        "TOTAL_TIMESTEPS": 2e5,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 4,
         "GAMMA": 0.99,
@@ -339,11 +339,11 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "atlantis_10_fs30.npz",  # Path to your .npz file
+        "ENV_FILE": "atlantis_20_fs30.npz",  # Path to your .npz file
         "REWARD_SCALE": 1/100,
         "EVAL_FREQUENCY": 1000,          # Evaluate every 1000 env steps
         "TRAIN_MEDIAN_WINDOW": 20,       # Window size for median training reward
-        "OPTIMAL_REWARD": 2.0,           # Optimal reward threshold (after scaling)
+        "OPTIMAL_REWARD": 12.0,           # Optimal reward threshold (after scaling)
     }
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
