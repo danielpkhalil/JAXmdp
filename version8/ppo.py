@@ -385,7 +385,7 @@ if __name__ == "__main__":
 
         # ENV setup
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "breakout_10_fs30.npz",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/atlantis_20_fs30/consolidated.npz",
         "REWARD_SCALE": 1.0,   # scale factor on environment rewards
 
         # LR schedule
