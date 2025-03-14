@@ -272,11 +272,7 @@ def evaluate_policy_deterministic(train_state, network, env, env_params, rng, ma
 # Main Training Loop
 # ------------------------------
 def run_ppo_training(config):
-    # 1) Create environment
-    if "MiniGrid" in config["ENV_NAME"]:
-        # or any detection that it is a MiniGrid environment
-        env, env_params = gymnax.make(config["ENV_NAME"])
-    elif config["ENV_NAME"] == "TabularMDP":
+    if config["ENV_NAME"] == "TabularMDP":
         env = TabularEnv(config["ENV_FILE"])
         env_params = env.default_params().replace(reward_scale=config["REWARD_SCALE"])
     else:
@@ -407,8 +403,8 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
-        "ENV_NAME": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-DoorKey-5x5-v0/consolidated.npz",  # Example MiniGrid name
-        "ENV_FILE": "",  # Not used unless you do "TabularMDP"
+        "ENV_NAME": "TabularMDP",  # Example MiniGrid name
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-DoorKey-5x5-v0/consolidated.npz",  # Not used unless you do "TabularMDP"
         "REWARD_SCALE": 1.0,
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
