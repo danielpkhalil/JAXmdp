@@ -401,7 +401,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-MultiRoom-N2-S4-v0/consolidated.npz",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-DoorKey-5x5-v0/consolidated.npz",
         "REWARD_SCALE": 1.0,
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
