@@ -43,26 +43,29 @@ class MiniGridCNNActorCritic(nn.Module):
         # x expected shape: (batch_size, H, W, C)
         # No /255.0 normalization here if you want to match SB3's MiniGridCNN defaults.
         # Convolution layers
-        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME")(x)
+        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
+                    kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME")(x)
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
+                    kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME")(x)
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME",
+                    kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
 
         # Flatten
         x = x.reshape((x.shape[0], -1))
 
         # 512-dim FC
-        x = nn.Dense(features=512)(x)
+        x = nn.Dense(features=512, kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
 
         # Policy head
-        logits = nn.Dense(self.action_dim)(x)
+        logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01))(x)
         pi = distrax.Categorical(logits=logits)
 
         # Value head
-        value = nn.Dense(1)(x)
+        value = nn.Dense(1, kernel_init=orthogonal(1.0))(x)
         return pi, jnp.squeeze(value, axis=-1)
 
 
