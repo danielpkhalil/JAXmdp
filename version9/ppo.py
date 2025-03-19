@@ -395,7 +395,7 @@ if __name__ == "__main__":
         "NUM_STEPS": 128,
         "TOTAL_TIMESTEPS": 1e7,
         "UPDATE_EPOCHS": 4,  # Matches SB3's typical PPO n_epochs
-        "NUM_MINIBATCHES": 64, #4
+        "NUM_MINIBATCHES": 1024, #4
         "GAMMA": 0.99,
         "GAE_LAMBDA": 0.95,
         "CLIP_EPS": 0.1,
