@@ -407,7 +407,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",  # Example MiniGrid name
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-LavaGapS5-v0/consolidated.npz",  # Not used unless you do "TabularMDP"
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-KeyCorridorS3R3-v0/consolidated.npz",  # Not used unless you do "TabularMDP"
         "REWARD_SCALE": 1.0,
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
