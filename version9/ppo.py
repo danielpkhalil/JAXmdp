@@ -408,12 +408,12 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
-        "ENV_NAME": "TabularMDP",  # Example MiniGrid name
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-Unlock-v0/consolidated.npz",  # Not used unless you do "TabularMDP"
+        "ENV_NAME": "TabularMDP",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/fruitbot_easy_l0_40_fs8/consolidated.npz",  # Not used unless you do "TabularMDP"
         "REWARD_SCALE": 1.0,
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
-        "OPTIMAL_REWARD": 1.0,  # Example
+        "OPTIMAL_REWARD": 5.0,  # Example
     }
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
