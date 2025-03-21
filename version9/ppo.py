@@ -41,7 +41,9 @@ class MiniGridCNNActorCritic(nn.Module):
     @nn.compact
     def __call__(self, x):
         # x expected shape: (batch_size, H, W, C)
-        # No /255.0 normalization here if you want to match SB3's MiniGridCNN defaults.
+        # No /255.0 normalization here to match SB3's MiniGridCNN defaults.
+        # Cast input to float32 even if not normalizing by 255.
+        x = x.astype(jnp.float32)
         # Convolution layers
         x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
