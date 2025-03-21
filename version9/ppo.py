@@ -394,7 +394,7 @@ def run_ppo_training(config):
 # ------------------------------
 if __name__ == "__main__":
     config = {
-        "SEED": 0,
+        "SEED": 1,
         "LR": 2.5e-4,
         "NUM_ENVS": 8,
         "NUM_STEPS": 128,
