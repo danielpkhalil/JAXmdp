@@ -1,10 +1,9 @@
 """
 ppo_minigrid_wandb_cnn_parallel.py
 
-This script is modified so that the entire training run is packaged into a pure function
-(`train_run`) that is jitted and vmapped over many seeds (in the style of PureJAX RL). In addition,
-a metrics history is accumulated (per update: update index, global env steps, best evaluation return)
-so that you can later plot reward curves for each seed.
+This script repackages the training run into a pure function (train_run) that is jitted
+and vmapped over many seeds (in the style of PureJAX RL). It records per-update metrics
+so you can later plot reward curves for each seed.
 """
 
 import jax
@@ -16,7 +15,7 @@ import wandb
 
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from typing import NamedTuple, Any, Tuple
+from typing import NamedTuple
 
 import distrax
 import gymnax
@@ -43,7 +42,6 @@ class MiniGridCNNActorCritic(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # x expected shape: (batch_size, H, W, C)
         x = x.astype(jnp.float32)
         x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
@@ -243,9 +241,10 @@ def evaluate_policy_deterministic(train_state, network, env, env_params, rng, ma
     steps = 0
     while (not done) and (steps < max_steps):
         pi, _ = network.apply(train_state.params, obs[None, ...])
-        action = int(jnp.argmax(pi.logits[0]))
+        # Remove the Python int conversion:
+        action = jnp.argmax(pi.logits[0])
         obs, state, reward, done, info = env.step(rng, state, action, env_params)
-        total_reward += float(reward)
+        total_reward += reward
         steps += 1
     return total_reward, steps
 
@@ -289,22 +288,17 @@ def train_run(config, seed):
     obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
 
     rollout_and_update_fn = make_rollout_and_update_fn(env, env_params, network, config)
-
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
 
-    # We will record metrics as a vector per update: [update_index, global_env_steps, best_eval_return]
-    # The training loop is implemented via a lax.scan with early-stopping flag.
+    # We'll record metrics per update: [update_index, global_env_steps, best_eval_return]
     def update_step(carry, _):
         (update_i, train_state, env_state, obsv, rng, global_env_steps, best_eval_return, cont_flag) = carry
 
         def do_update(_):
-            # Run rollout and update
             new_train_state, new_env_state, new_obsv, new_rng, traj_batch = rollout_and_update_fn(
                 train_state, env_state, obsv, rng
             )
             new_global_env_steps = global_env_steps + steps_per_update
-
-            # Check evaluation condition: if global_env_steps crossed a multiple of EVAL_FREQUENCY
             do_eval = ((new_global_env_steps // config["EVAL_FREQUENCY"]) != (global_env_steps // config["EVAL_FREQUENCY"]))
             def eval_true_fn(_):
                 new_rng2, eval_rng = jax.random.split(new_rng)
@@ -317,7 +311,6 @@ def train_run(config, seed):
             new_cont_flag = new_best_eval_return < config["OPTIMAL_REWARD"]
             return new_train_state, new_env_state, new_obsv, new_rng, new_global_env_steps, new_best_eval_return, new_cont_flag
 
-        # If cont_flag is false, we simply carry forward state.
         (new_train_state, new_env_state, new_obsv, new_rng, new_global_env_steps, new_best_eval_return, new_cont_flag) = \
             jax.lax.cond(cont_flag, do_update, lambda _: (train_state, env_state, obsv, rng, global_env_steps, best_eval_return, cont_flag), operand=None)
 
@@ -328,7 +321,6 @@ def train_run(config, seed):
     num_updates = config["NUM_UPDATES"]
     init_carry = (0, train_state, env_state, obsv, rng, 0, -1e9, True)
     final_carry, metrics_history = jax.lax.scan(update_step, init_carry, None, length=num_updates)
-    # metrics_history has shape (num_updates, 3)
     final_train_state, final_global_steps, final_best_eval = final_carry[1], final_carry[5], final_carry[6]
     return final_train_state, final_best_eval, metrics_history
 
@@ -369,7 +361,7 @@ if __name__ == "__main__":
     num_seeds = 16
     seeds = jnp.arange(config["SEED"], config["SEED"] + num_seeds)
 
-    # Wrap the training function in vmap and jit
+    # Wrap the training function in vmap and jit (note: no Python int conversions here)
     train_vmap = jax.jit(jax.vmap(lambda s: train_run(config, s), in_axes=0))
     final_states, eval_returns, metrics_histories = train_vmap(seeds)
 
@@ -378,11 +370,9 @@ if __name__ == "__main__":
     eval_returns = jax.device_get(eval_returns)
     metrics_histories = jax.device_get(metrics_histories)  # shape: (num_seeds, NUM_UPDATES, 3)
 
-    # Log summary of final evaluation returns
     wandb.log({"parallel_eval_returns": eval_returns})
     print("Parallel training finished. Evaluation returns per seed:", eval_returns)
 
-    # Optionally, you can save or log the full metrics_histories (for plotting reward curves)
-    # For example, each row in metrics_histories[seed] is: [update_index, global_env_steps, best_eval_return]
+    # Log full metrics histories for later plotting reward curves per seed
     wandb.log({"metrics_histories": metrics_histories})
     wandb.finish()
