@@ -21,7 +21,7 @@ import wandb
 
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from typing import NamedTuple, Tuple, Dict, Any
+from typing import NamedTuple, Dict
 
 import distrax
 import gymnax
@@ -354,15 +354,16 @@ def train_single_seed(rng: jax.random.PRNGKey, config: dict) -> Dict[str, jnp.nd
         )
         global_env_steps += steps_per_update
 
+        # Pull JAX arrays to host (NumPy) for Python-based logic
+        info_dict_host = jax.tree_util.tree_map(lambda x: np.array(x), traj_batch.info)
+        returned_ep_ret = info_dict_host["returned_episode_returns"]  # shape [T, N]
+        returned_ep = info_dict_host["returned_episode"]              # shape [T, N]
+
         # (A) Compute "mean training return" from this rollout
-        info_dict = traj_batch.info  # shape [NUM_STEPS, NUM_ENVS]
-        returned_ep_ret = np.array(info_dict["returned_episode_returns"])
-        # Mean over all steps & envs
-        mean_return_for_update = returned_ep_ret.mean()
+        mean_return_for_update = returned_ep_ret.mean()  # now pure NumPy
         mean_train_returns.append(mean_return_for_update)
 
         # (B) Update train_returns_buffer for median
-        returned_ep = np.array(info_dict["returned_episode"])
         ended_idx = np.where(returned_ep > 0)
         ep_returns = returned_ep_ret[ended_idx]  # returns for episodes that ended
         for r in ep_returns:
@@ -474,7 +475,7 @@ if __name__ == "__main__":
     #   }
 
     # For demonstration, let's log the final returns
-    # We'll log *one line per seed* + a mean or something
+    # We'll log *one line per seed* + an average
     mean_train_returns = np.array(results["mean_train_returns"])  # shape (num_seeds, NUM_UPDATES)
     median_train_returns = np.array(results["median_train_returns"])
     eval_returns = np.array(results["eval_returns"])
