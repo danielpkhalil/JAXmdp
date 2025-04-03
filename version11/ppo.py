@@ -373,7 +373,7 @@ if __name__ == "__main__":
     }
 
     # 1) Initialize wandb
-    wandb.init(project="my_tabular_ppo_jitted", config=config)
+    wandb.init(project="parallel_seed_full_jit", config=config)
 
     # 2) Build the train(rng) function
     train_fn = make_train(config)
