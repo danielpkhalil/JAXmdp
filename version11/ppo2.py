@@ -304,7 +304,7 @@ if __name__ == "__main__":
     }
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
-    wandb.init(project="combined_ppo_vmap_no_np", config=config)
+    wandb.init(project="parallel_seed_hybrid_jit", config=config)
     num_seeds = 4
     base_rng = jax.random.PRNGKey(config["SEED"])
     rng_seeds = jax.random.split(base_rng, num_seeds)
