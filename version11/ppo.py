@@ -12,7 +12,7 @@ import distrax
 import gymnax
 from gymnax.wrappers.purerl import LogWrapper
 
-# If you have your custom TabularEnv definitions:
+# For your custom TabularEnv:
 try:
     from gymnax_env import TabularEnv, TabularEnvParams
 except ImportError:
@@ -105,7 +105,7 @@ def make_train(config):
 
     NOTE: Some config keys (EVAL_FREQUENCY, TRAIN_MEDIAN_WINDOW, OPTIMAL_REWARD, etc.)
     are NOT used inside the fully-jitted loop. If you need on-the-fly eval or
-    early-stopping, do it outside the jit scanning.
+    early-stopping, do that outside the big jit.
     """
 
     # Calculate how many updates from config:
@@ -130,7 +130,7 @@ def make_train(config):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
         return config["LR"] * frac
 
-    # The train(rng) function we will JIT
+    # The train(rng) function
     def train(rng):
         # Decide on CNN vs MLP
         obs_shape = env.observation_space(env_params).shape
@@ -179,10 +179,6 @@ def make_train(config):
         # One update step (rollout + PPO)
         # ---------------------------------------------------------------------
         def _update_step(runner_state, update_idx):
-            """
-            Collect NUM_STEPS of data, then run PPO update.
-            Returns new (train_state, env_state, last_obs, rng, global_step_count).
-            """
             train_state, env_state, last_obs, rng, global_step_count = runner_state
 
             # (A) Rollout
@@ -315,8 +311,6 @@ def make_train(config):
                 return new_state, None
 
             update_state = (train_state, traj_batch, advantages, returns, rng)
-            # We do exactly 1 call to _update_epoch—but if you want multiple epochs,
-            # note that we do them in the 'for _ in range(UPDATE_EPOCHS)' above.
             update_state, _ = jax.lax.scan(_update_epoch, update_state, None, length=1)
             train_state = update_state[0]
             rng = update_state[-1]
@@ -330,9 +324,7 @@ def make_train(config):
             new_runner_state = (train_state, env_state, last_obs, rng, global_step_count)
             return new_runner_state, metrics
 
-        # ---------------------------------------------------------------------
         # Scan over all updates
-        # ---------------------------------------------------------------------
         runner_state = (train_state, env_state, obsv, rng, jnp.array(0))
         runner_state, metrics = jax.lax.scan(
             _update_step, runner_state, jnp.arange(config["NUM_UPDATES"])
@@ -347,18 +339,19 @@ def make_train(config):
 
 
 # -----------------------------------------------------------------------------
-# Example usage
+# Script Entry Point with wandb Logging at the End
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import time
     import matplotlib.pyplot as plt
+    import wandb  # pip install wandb
 
     config = {
         "SEED": 1,
         "LR": 2.5e-4,
         "NUM_ENVS": 8,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 1e4,
+        "TOTAL_TIMESTEPS": 1e7,
         "UPDATE_EPOCHS": 4,   # Matches SB3's typical PPO n_epochs
         "NUM_MINIBATCHES": 4,
         "GAMMA": 0.99,
@@ -372,50 +365,73 @@ if __name__ == "__main__":
         "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/fruitbot_easy_l0_40_fs8/consolidated.npz",  # used if ENV_NAME == "TabularMDP"
         "REWARD_SCALE": 1.0,
 
-        # The following can't be done inside the fully-jitted loop:
+        # Not used internally for a fully-jitted run:
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
         "OPTIMAL_REWARD": 5.0,
         "ANNEAL_LR": True,   # Use linear LR schedule
     }
 
-    # Build the train(rng) function
+    # 1) Initialize wandb
+    wandb.init(project="my_tabular_ppo_jitted", config=config)
+
+    # 2) Build the train(rng) function
     train_fn = make_train(config)
     train_jit = jax.jit(train_fn)
 
-    # Single-seed example
+    # 3) Single-seed training
     rng = jax.random.PRNGKey(config["SEED"])
     t0 = time.time()
     out = jax.block_until_ready(train_jit(rng))
-    print(f"Single seed training took {time.time() - t0:.2f} seconds.")
+    elapsed_single = time.time() - t0
+    print(f"Single-seed training took {elapsed_single:.2f} seconds.")
 
-    # The shape of returned_episode_returns is [NUM_UPDATES, NUM_STEPS, NUM_ENVS]
+    # Extract metrics
+    # returned_episode_returns shape => [NUM_UPDATES, NUM_STEPS, NUM_ENVS]
     returned_ep_ret = out["metrics"]["returned_episode_returns"]
-    # For a simple scalar curve, we might average over steps & envs each update:
-    mean_return_per_update = returned_ep_ret.mean(axis=(-1, -2))
+    mean_return_per_update = returned_ep_ret.mean(axis=(-1, -2))  # average over steps & envs
 
-    plt.plot(mean_return_per_update)
+    # 4) Plot single-seed training curve
+    plt.figure()
+    plt.plot(mean_return_per_update, label="Single Seed")
     plt.xlabel("Update")
     plt.ylabel("Mean Episode Return")
     plt.title("Single-Seed PPO on TabularMDP (fully-jitted)")
-    plt.show()
+    plt.legend()
+    # Log to wandb as an image
+    wandb.log({"training_returns_plot_single_seed": wandb.Image(plt)})
+    plt.close()
 
-    # Multi-seed example:
+    # 5) Multi-seed example
     num_seeds = 4
-    rngs = jax.random.split(jax.random.PRNGKey(999), num_seeds)
+    rng_seeds = jax.random.split(jax.random.PRNGKey(999), num_seeds)
     batched_train = jax.jit(jax.vmap(train_fn))
     t0 = time.time()
-    outs = jax.block_until_ready(batched_train(rngs))
-    print(f"{num_seeds}-seed training took {time.time() - t0:.2f} seconds.")
+    outs = jax.block_until_ready(batched_train(rng_seeds))
+    elapsed_multi = time.time() - t0
+    print(f"{num_seeds}-seed training took {elapsed_multi:.2f} seconds.")
 
-    # Each seed has shape [NUM_UPDATES, NUM_STEPS, NUM_ENVS]
-    rets_all = outs["metrics"]["returned_episode_returns"]  # shape => (num_seeds, updates, steps, envs)
+    # outs["metrics"]["returned_episode_returns"] => shape (num_seeds, NUM_UPDATES, NUM_STEPS, NUM_ENVS)
+    rets_all = outs["metrics"]["returned_episode_returns"]
+
+    plt.figure()
     for i in range(num_seeds):
-        mean_ret_i = rets_all[i].mean(axis=(-1, -2))
+        mean_ret_i = rets_all[i].mean(axis=(-1, -2))  # shape [NUM_UPDATES]
         plt.plot(mean_ret_i, label=f"seed {i}")
-
     plt.xlabel("Update")
     plt.ylabel("Mean Episode Return")
     plt.title("Multi-Seed PPO on TabularMDP")
     plt.legend()
-    plt.show()
+    # Log multi-seed figure
+    wandb.log({"training_returns_plot_multi_seed": wandb.Image(plt)})
+    plt.close()
+
+    # 6) Optionally log final results numeric
+    wandb.log({
+        "final_single_seed_return": float(mean_return_per_update[-1]),
+        "time_single_seed": elapsed_single,
+        "time_multi_seed_for_4": elapsed_multi,
+    })
+
+    # 7) Finish wandb run
+    wandb.finish()
