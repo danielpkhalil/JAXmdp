@@ -20,6 +20,7 @@ import wandb
 import numpy as np
 import matplotlib.pyplot as plt
 import io
+from PIL import Image
 
 from flax.linen.initializers import orthogonal
 from flax.training.train_state import TrainState
@@ -333,11 +334,13 @@ if __name__ == "__main__":
     plt.xlabel("Update Step")
     plt.ylabel("Mean Train Return")
     plt.legend()
-    # Save plot to an in-memory buffer and log to wandb
+    # Save plot to an in-memory buffer
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
-    wandb.log({"reward_over_time": wandb.Image(buf)})
+    # Load the image from the buffer and convert to a numpy array
+    img = np.array(Image.open(buf))
+    wandb.log({"reward_over_time": wandb.Image(img)})
     plt.show()
 
     wandb.finish()
