@@ -351,7 +351,7 @@ if __name__ == "__main__":
         "LR": 2.5e-4,
         "NUM_ENVS": 8,
         "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 1e4,
+        "TOTAL_TIMESTEPS": 1e6,
         "UPDATE_EPOCHS": 4,   # Matches SB3's typical PPO n_epochs
         "NUM_MINIBATCHES": 4,
         "GAMMA": 0.99,
