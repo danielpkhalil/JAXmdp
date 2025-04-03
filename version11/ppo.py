@@ -370,7 +370,7 @@ if __name__ == "__main__":
     seeds = jnp.arange(config["SEED"], config["SEED"] + num_seeds)
 
     # Wrap the training function in vmap and jit
-    train_vmap = jax.jit(jax.vmap(lambda s: train_run(config, int(s)), in_axes=0))
+    train_vmap = jax.jit(jax.vmap(lambda s: train_run(config, s), in_axes=0))
     final_states, eval_returns, metrics_histories = train_vmap(seeds)
 
     # Bring results back to host
