@@ -6,14 +6,12 @@ from flax import struct
 import chex
 from gymnax.environments import environment, spaces
 
-
 @struct.dataclass
 class TabularState(environment.EnvState):
     state_idx: jnp.int32
     steps: jnp.int32
     done: bool
     time: int
-
 
 @struct.dataclass
 class TabularEnvParams(environment.EnvParams):
@@ -23,28 +21,36 @@ class TabularEnvParams(environment.EnvParams):
     horizon: int = struct.field(default=40, pytree_node=False)
     max_steps_in_episode: int = struct.field(default=40, pytree_node=False)
     reward_scale: float = struct.field(default=1.0, pytree_node=False)
-
-    # === New framestack parameter ===
     framestack: int = struct.field(default=1, pytree_node=False)
 
-
 class TabularEnv(environment.Environment):
+    """
+    This environment:
+      - If framestack=1, returns (H, W, 3) frames as usual.
+      - If framestack>1 and 'prev_state_mapping' is present,
+        it returns (H, W, 3 * framestack).
+      - We do NOT store frames in TabularState, so there's
+        no shape mismatch in 'env_state' across steps.
+      - Instead, we reconstruct stacked frames by looking up
+        'prev_state_mapping' from the current state_idx backwards.
+    """
     def __init__(self, problem_file: str):
         super().__init__()
         mdp = np.load(problem_file, allow_pickle=True, mmap_mode="r")
         self.num_states, self._num_actions = mdp["transitions"].shape
+
         self.transitions = jnp.array(mdp["transitions"])
         self.rewards = jnp.array(mdp["rewards"])
-
         self.screens = None
         self.screen_mapping = None
-        self.prev_state_mapping = None  # For framestacking
+        self.prev_state_mapping = None
+
         if "screens" in mdp:
-            self.screens = jnp.array(mdp["screens"])
+            self.screens = jnp.array(mdp["screens"])  # shape: (num_distinct_screens, H, W, 3)
         if "screen_mapping" in mdp:
-            self.screen_mapping = jnp.array(mdp["screen_mapping"])
+            self.screen_mapping = jnp.array(mdp["screen_mapping"])  # shape: (num_states,)
         if "prev_state_mapping" in mdp:
-            self.prev_state_mapping = jnp.array(mdp["prev_state_mapping"])
+            self.prev_state_mapping = jnp.array(mdp["prev_state_mapping"])  # shape: (num_states,)
 
         self.TERMINAL_STATE = -1
 
@@ -63,52 +69,39 @@ class TabularEnv(environment.Environment):
         return spaces.Discrete(self.num_actions)
 
     def observation_space(self, params: Optional[TabularEnvParams] = None) -> spaces.Space:
+        """
+        Returns either:
+          - (H, W, 3) if framestack=1
+          - (H, W, 3 * framestack) if framestack>1
+          - or shape (1,) if no screens are present.
+        """
         if params is None:
             params = self.default_params()
 
-        # --- If using screen observations ---
+        # If using screen observations and we have screens
         if params.use_screen_observations and (self.screens is not None):
-            # If framestack > 1, expand channel dimension accordingly
-            if params.framestack > 1 and self.prev_state_mapping is not None:
-                # Example shape: (H, W, 3 * framestack) if base shape is (H, W, 3)
-                h, w, c = self.screens.shape[1:]
-                shape = (h, w, c * params.framestack)
-                return spaces.Box(
-                    low=0,
-                    high=255,
-                    shape=shape,
-                    dtype=jnp.uint8,
-                )
+            h, w, c = self.screens.shape[1:]  # e.g. (H, W, 3)
+            if params.framestack > 1 and (self.prev_state_mapping is not None):
+                shape = (h, w, c * params.framestack)  # e.g. (H, W, 3 * 4)
             else:
-                return spaces.Box(
-                    low=0,
-                    high=255,
-                    shape=self.screens.shape[1:],  # e.g. (H, W, 3)
-                    dtype=jnp.uint8,
-                )
-        # --- Otherwise, fallback to tabular observation (index only) ---
+                shape = (h, w, c)  # single frame
+            return spaces.Box(low=0, high=255, shape=shape, dtype=jnp.uint8)
         else:
-            return spaces.Box(
-                low=0,
-                high=self.num_states - 1,
-                shape=(1,),
-                dtype=jnp.float32,
-            )
+            # Fallback: a single scalar state index
+            return spaces.Box(low=0, high=self.num_states - 1, shape=(1,), dtype=jnp.float32)
 
     def state_space(self, params: TabularEnvParams) -> spaces.Dict:
-        return spaces.Dict(
-            {
-                "state_idx": spaces.Discrete(self.num_states),
-                "steps": spaces.Discrete(params.horizon),
-                "done": spaces.Discrete(2),
-                "time": spaces.Discrete(params.max_steps_in_episode),
-            }
-        )
+        return spaces.Dict({
+            "state_idx": spaces.Discrete(self.num_states),
+            "steps": spaces.Discrete(params.horizon),
+            "done": spaces.Discrete(2),
+            "time": spaces.Discrete(params.max_steps_in_episode),
+        })
 
     def reset_env(
-            self,
-            key: chex.PRNGKey,
-            params: Optional[TabularEnvParams] = None
+        self,
+        key: chex.PRNGKey,
+        params: Optional[TabularEnvParams] = None
     ) -> Tuple[chex.Array, TabularState]:
         if params is None:
             params = self.default_params()
@@ -122,11 +115,11 @@ class TabularEnv(environment.Environment):
         return init_obs, init_state
 
     def step_env(
-            self,
-            key: chex.PRNGKey,
-            state: TabularState,
-            action: Union[int, float, chex.Array],
-            params: Optional[TabularEnvParams] = None
+        self,
+        key: chex.PRNGKey,
+        state: TabularState,
+        action: Union[int, float, chex.Array],
+        params: Optional[TabularEnvParams] = None
     ) -> Tuple[chex.Array, TabularState, jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
         if params is None:
             params = self.default_params()
@@ -154,15 +147,17 @@ class TabularEnv(environment.Environment):
             done_by_reward = (reward != 0) & (params.done_on_reward)
             done_new = done_by_terminal | done_by_horizon | done_by_reward
 
+            # possible 'no_done_reward'
             reward += jnp.where(
                 done_by_horizon & ~done_by_terminal,
                 jnp.float32(params.no_done_reward),
                 jnp.float32(0),
             )
 
-            # Scale the reward
+            # Scale reward
             reward = reward * jnp.float32(params.reward_scale)
 
+            # If done, stay in the same state_idx
             next_state = TabularState(
                 state_idx=jnp.where(done_new, state.state_idx, next_state_idx),
                 steps=new_steps,
@@ -184,32 +179,37 @@ class TabularEnv(environment.Environment):
         return jax.lax.cond(state.done, if_done_fn, if_not_done_fn, operand=None)
 
     def get_obs(
-            self,
-            state: TabularState,
-            params: Optional[TabularEnvParams] = None,
-            key: Optional[chex.PRNGKey] = None
+        self,
+        state: TabularState,
+        params: Optional[TabularEnvParams] = None,
+        key: Optional[chex.PRNGKey] = None
     ) -> chex.Array:
+        """
+        Return a single screen of shape (H, W, 3) if framestack=1,
+        or a stacked set of screens (H, W, 3 * framestack) by traversing
+        prev_state_mapping up to 'framestack' times.
+        If no screens exist, we fallback to the integer state index.
+        """
         if params is None:
             params = self.default_params()
 
-        # --- If we have screens available and user wants screen obs ---
+        # If screens are present and user wants them
         if params.use_screen_observations and self.screens is not None:
-            # --- If framestack > 1 and we have a prev_state_mapping ---
-            if params.framestack > 1 and (self.prev_state_mapping is not None):
-                # Gather up to `framestack` states: current + previous ones
+            # If we have framestack>1 and a prev_state_mapping
+            if params.framestack > 1 and self.prev_state_mapping is not None:
+                # Gather up to 'framestack' states: current + previous
                 def gather_screen(idx):
-                    # Safely fetch screens or zero if out of range
+                    # If idx is valid, return that screen
                     valid_idx = (idx >= 0) & (idx < self.num_states)
                     return jnp.where(
                         valid_idx,
-                        self.screens[self.screen_mapping[idx]],
+                        self.screens[self.screen_mapping[idx]],  # shape (H,W,3)
                         jnp.zeros(self.screens.shape[1:], dtype=jnp.uint8),
                     )
 
-                # We walk backward from current state using `prev_state_mapping`.
-                # This is a simple Python loop; you could JAX-ify if needed.
                 idx_list = [state.state_idx]
                 cur_idx = state.state_idx
+                # walk backward
                 for _ in range(params.framestack - 1):
                     cur_idx = jnp.where(
                         (cur_idx >= 0) & (cur_idx < self.num_states),
@@ -218,18 +218,18 @@ class TabularEnv(environment.Environment):
                     )
                     idx_list.append(cur_idx)
 
-                # Reverse to have oldest frame first if desired
+                # Reverse so oldest is first
                 idx_list = idx_list[::-1]
 
-                # Convert each idx to a screen via gather_screen(...)
-                # and stack along the channel dimension
+                # For each idx in idx_list, gather (H,W,3), then concatenate along channels
                 stacked_frames = jnp.concatenate(
-                    [gather_screen(idx) for idx in idx_list], axis=-1
+                    [gather_screen(i) for i in idx_list], axis=-1
                 )
+                # shape => (H, W, 3 * framestack)
                 return stacked_frames
 
-            # --- If no framestack or no prev_state_mapping, single-frame fetch ---
             else:
+                # Single-frame
                 def valid_screen_fn(idx):
                     return self.screens[self.screen_mapping[idx]]
 
@@ -240,11 +240,11 @@ class TabularEnv(environment.Environment):
                     (state.state_idx >= 0) & (state.state_idx < self.num_states),
                     valid_screen_fn,
                     invalid_screen_fn,
-                    state.state_idx
+                    state.state_idx,
                 )
-        # --- Otherwise, fallback to the state index as the observation ---
-        else:
-            return jnp.array([state.state_idx], dtype=jnp.float32)
+
+        # else fallback to integer index
+        return jnp.array([state.state_idx], dtype=jnp.float32)
 
     def discount(self, state: TabularState, params: Optional[TabularEnvParams] = None) -> jnp.ndarray:
         return jnp.array(1.0 - state.done, dtype=jnp.float32)
