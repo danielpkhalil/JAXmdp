@@ -21,8 +21,6 @@ class TabularEnvParams(environment.EnvParams):
     use_screen_observations: bool = struct.field(default=True, pytree_node=False)
     horizon: int = struct.field(default=40, pytree_node=False)
     max_steps_in_episode: int = struct.field(default=40, pytree_node=False)
-
-    # Reward scaling factor
     reward_scale: float = struct.field(default=1.0, pytree_node=False)
 
 class TabularEnv(environment.Environment):
@@ -30,6 +28,7 @@ class TabularEnv(environment.Environment):
         super().__init__()
         mdp = np.load(problem_file, allow_pickle=True, mmap_mode="r")
         self.num_states, self._num_actions = mdp["transitions"].shape
+        # Preconvert to jax arrays once
         self.transitions = jnp.array(mdp["transitions"])
         self.rewards = jnp.array(mdp["rewards"])
 
@@ -60,35 +59,20 @@ class TabularEnv(environment.Environment):
         if params is None:
             params = self.default_params()
         if params.use_screen_observations and (self.screens is not None):
-            return spaces.Box(
-                low=0,
-                high=255,
-                shape=self.screens.shape[1:],
-                dtype=jnp.uint8,
-            )
+            return spaces.Box(low=0, high=255, shape=self.screens.shape[1:], dtype=jnp.uint8)
         else:
-            return spaces.Box(
-                low=0,
-                high=self.num_states - 1,
-                shape=(1,),
-                dtype=jnp.float32,
-            )
+            return spaces.Box(low=0, high=self.num_states - 1, shape=(1,), dtype=jnp.float32)
 
     def state_space(self, params: TabularEnvParams) -> spaces.Dict:
-        return spaces.Dict(
-            {
-                "state_idx": spaces.Discrete(self.num_states),
-                "steps": spaces.Discrete(params.horizon),
-                "done": spaces.Discrete(2),
-                "time": spaces.Discrete(params.max_steps_in_episode),
-            }
-        )
+        return spaces.Dict({
+            "state_idx": spaces.Discrete(self.num_states),
+            "steps": spaces.Discrete(params.horizon),
+            "done": spaces.Discrete(2),
+            "time": spaces.Discrete(params.max_steps_in_episode),
+        })
 
-    def reset_env(
-        self,
-        key: chex.PRNGKey,
-        params: Optional[TabularEnvParams] = None
-    ) -> Tuple[chex.Array, TabularState]:
+    def reset_env(self, key: chex.PRNGKey, params: Optional[TabularEnvParams] = None
+                  ) -> Tuple[chex.Array, TabularState]:
         if params is None:
             params = self.default_params()
         init_state = TabularState(
@@ -100,13 +84,10 @@ class TabularEnv(environment.Environment):
         init_obs = self.get_obs(init_state, params)
         return init_obs, init_state
 
-    def step_env(
-        self,
-        key: chex.PRNGKey,
-        state: TabularState,
-        action: Union[int, float, chex.Array],
-        params: Optional[TabularEnvParams] = None
-    ) -> Tuple[chex.Array, TabularState, jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
+    def step_env(self, key: chex.PRNGKey, state: TabularState,
+                 action: Union[int, float, chex.Array],
+                 params: Optional[TabularEnvParams] = None
+                ) -> Tuple[chex.Array, TabularState, jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
         if params is None:
             params = self.default_params()
 
@@ -126,22 +107,15 @@ class TabularEnv(environment.Environment):
         def if_not_done_fn(_):
             next_state_idx = self.transitions[state.state_idx, action]
             reward = self.rewards[state.state_idx, action]
-
             new_steps = state.steps + 1
             done_by_terminal = (next_state_idx == self.TERMINAL_STATE)
             done_by_horizon = (new_steps >= params.horizon)
             done_by_reward = (reward != 0) & (params.done_on_reward)
             done_new = done_by_terminal | done_by_horizon | done_by_reward
-
-            reward += jnp.where(
-                done_by_horizon & ~done_by_terminal,
-                jnp.float32(params.no_done_reward),
-                jnp.float32(0),
-            )
-
-            # Scale the reward
+            reward += jnp.where(done_by_horizon & ~done_by_terminal,
+                                jnp.float32(params.no_done_reward),
+                                jnp.float32(0))
             reward = reward * jnp.float32(params.reward_scale)
-
             next_state = TabularState(
                 state_idx=jnp.where(done_new, state.state_idx, next_state_idx),
                 steps=new_steps,
@@ -149,7 +123,6 @@ class TabularEnv(environment.Environment):
                 time=state.time + 1
             )
             next_obs = self.get_obs(next_state, params)
-
             info = {
                 "steps": new_steps,
                 "reward": reward,
@@ -162,30 +135,17 @@ class TabularEnv(environment.Environment):
 
         return jax.lax.cond(state.done, if_done_fn, if_not_done_fn, operand=None)
 
-    def get_obs(
-        self,
-        state: TabularState,
-        params: Optional[TabularEnvParams] = None,
-        key: Optional[chex.PRNGKey] = None
-    ) -> chex.Array:
+    def get_obs(self, state: TabularState, params: Optional[TabularEnvParams] = None,
+                key: Optional[chex.PRNGKey] = None) -> chex.Array:
         if params is None:
             params = self.default_params()
-
-        if params.use_screen_observations and self.screens is not None:
-            def valid_screen_fn(idx):
-                return self.screens[self.screen_mapping[idx]]
-
-            def invalid_screen_fn(_):
-                return jnp.zeros(self.screens.shape[1:], dtype=jnp.uint8)
-
-            return jax.lax.cond(
-                (state.state_idx >= 0) & (state.state_idx < self.num_states),
-                valid_screen_fn,
-                invalid_screen_fn,
-                state.state_idx
-            )
-        else:
-            return jnp.array([state.state_idx], dtype=jnp.float32)
+        # Use a single cond to decide between screen observation and raw index.
+        return jax.lax.cond(
+            jnp.logical_and(params.use_screen_observations, self.screens is not None),
+            lambda _: self.screens[self.screen_mapping[state.state_idx]],
+            lambda _: jnp.array([state.state_idx], dtype=jnp.float32),
+            operand=None
+        )
 
     def discount(self, state: TabularState, params: Optional[TabularEnvParams] = None) -> jnp.ndarray:
         return jnp.array(1.0 - state.done, dtype=jnp.float32)
