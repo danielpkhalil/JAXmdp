@@ -212,10 +212,14 @@ class TabularEnv(environment.Environment):
         params: TabularEnvParams
     ) -> chex.Array:
         if params.use_screen_observations and self.screens is not None:
+            # Determine target shape using the first valid screen.
+            target_shape = self.screens[self.screen_mapping[0]].shape
+
             def valid_screen_fn(idx):
                 return self.screens[self.screen_mapping[idx]]
             def invalid_screen_fn(_):
-                return jnp.zeros(self.screens.shape[1:], dtype=jnp.uint8)
+                # Use the target_shape to create a zeros array with identical shape.
+                return jnp.zeros(target_shape, dtype=jnp.uint8)
             return jax.lax.cond(
                 (state.state_idx >= 0) & (state.state_idx < self.num_states),
                 valid_screen_fn,
