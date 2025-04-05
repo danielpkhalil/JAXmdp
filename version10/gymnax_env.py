@@ -1,4 +1,3 @@
-# gymnax_env.py
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -109,10 +108,11 @@ class TabularEnv(environment.Environment):
             steps=jnp.int32(0),
             done=False,
             time=0,
-            frame_buffer=jnp.array([])  # This is now produced by the default_factory.
+            frame_buffer=jnp.array([])  # produced via default_factory
         )
         init_obs = self._get_single_frame_obs(init_state, params)
         if params.use_screen_observations and self.screens is not None and params.num_frames > 1:
+            # Create the initial buffer by repeating the single frame.
             repeated = jnp.concatenate([init_obs] * params.num_frames, axis=-1)
             init_state = init_state.replace(frame_buffer=repeated)
             return init_state.frame_buffer, init_state
@@ -165,12 +165,21 @@ class TabularEnv(environment.Environment):
             )
             next_obs_single = self._get_single_frame_obs(next_state, params)
             if params.use_screen_observations and self.screens is not None and params.num_frames > 1:
-                num_channels = self.screens.shape[-1]
+                num_channels = self.screens.shape[-1]  # e.g. 3
+                expected_channels = num_channels * params.num_frames
                 old_buffer = next_state.frame_buffer
                 def init_buffer_fn(_):
                     return jnp.concatenate([next_obs_single] * params.num_frames, axis=-1)
                 def update_buffer_fn(buf):
-                    return jnp.concatenate([buf[..., num_channels:], next_obs_single], axis=-1)
+                    # Drop exactly one frame (the oldest) and append the new frame.
+                    new_buf = jnp.concatenate([buf[..., num_channels:], next_obs_single], axis=-1)
+                    # Check that new_buf has the expected shape; if not, reinitialize.
+                    return jax.lax.cond(
+                        new_buf.shape[-1] == expected_channels,
+                        lambda x: x,
+                        lambda _: jnp.concatenate([next_obs_single] * params.num_frames, axis=-1),
+                        new_buf
+                    )
                 new_buffer = jax.lax.cond(
                     old_buffer.size == 0,
                     init_buffer_fn,
@@ -212,13 +221,11 @@ class TabularEnv(environment.Environment):
         params: TabularEnvParams
     ) -> chex.Array:
         if params.use_screen_observations and self.screens is not None:
-            # Determine target shape using the first valid screen.
+            # Determine a target shape from a known valid screen.
             target_shape = self.screens[self.screen_mapping[0]].shape
-
             def valid_screen_fn(idx):
                 return self.screens[self.screen_mapping[idx]]
             def invalid_screen_fn(_):
-                # Use the target_shape to create a zeros array with identical shape.
                 return jnp.zeros(target_shape, dtype=jnp.uint8)
             return jax.lax.cond(
                 (state.state_idx >= 0) & (state.state_idx < self.num_states),
