@@ -393,16 +393,16 @@ if __name__ == "__main__":
     returned_ep_ret = out["metrics"]["returned_episode_returns"]
     mean_return_per_update = returned_ep_ret.mean(axis=(-1, -2))  # average over steps & envs
 
-    # 4) Plot single-seed training curve
-    plt.figure()
-    plt.plot(mean_return_per_update, label="Single Seed")
-    plt.xlabel("Update")
-    plt.ylabel("Mean Episode Return")
-    plt.title("Single-Seed PPO on TabularMDP (fully-jitted)")
-    plt.legend()
-    # Log to wandb as an image
-    wandb.log({"training_returns_plot_single_seed": wandb.Image(plt)})
-    plt.close()
+    # 4) Plot single-seed training curve (line plot like the DQN plotting)
+    fig_single, ax_single = plt.subplots()
+    ax_single.plot(mean_return_per_update, label="Single Seed")
+    ax_single.set_xlabel("Update")
+    ax_single.set_ylabel("Mean Episode Return")
+    ax_single.set_title("Single-Seed PPO on TabularMDP (fully-jitted)")
+    ax_single.legend()
+    # Log the figure to wandb as an image
+    wandb.log({"training_returns_plot_single_seed": wandb.Image(fig_single)})
+    plt.close(fig_single)
 
     # 5) Multi-seed example
     num_seeds = 4
@@ -416,17 +416,17 @@ if __name__ == "__main__":
     # outs["metrics"]["returned_episode_returns"] => shape (num_seeds, NUM_UPDATES, NUM_STEPS, NUM_ENVS)
     rets_all = outs["metrics"]["returned_episode_returns"]
 
-    plt.figure()
+    fig_multi, ax_multi = plt.subplots()
     for i in range(num_seeds):
         mean_ret_i = rets_all[i].mean(axis=(-1, -2))  # shape [NUM_UPDATES]
-        plt.plot(mean_ret_i, label=f"seed {i}")
-    plt.xlabel("Update")
-    plt.ylabel("Mean Episode Return")
-    plt.title("Multi-Seed PPO on TabularMDP")
-    plt.legend()
+        ax_multi.plot(mean_ret_i, label=f"seed {i}")
+    ax_multi.set_xlabel("Update")
+    ax_multi.set_ylabel("Mean Episode Return")
+    ax_multi.set_title("Multi-Seed PPO on TabularMDP")
+    ax_multi.legend()
     # Log multi-seed figure
-    wandb.log({"training_returns_plot_multi_seed": wandb.Image(plt)})
-    plt.close()
+    wandb.log({"training_returns_plot_multi_seed": wandb.Image(fig_multi)})
+    plt.close(fig_multi)
 
     # 6) Optionally log final results numeric
     wandb.log({
