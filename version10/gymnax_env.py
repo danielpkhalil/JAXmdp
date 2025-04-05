@@ -219,7 +219,6 @@ class TabularEnv(environment.Environment):
         params: TabularEnvParams
     ) -> chex.Array:
         if params.use_screen_observations and self.screens is not None:
-            # Determine target shape from a valid screen.
             target_shape = self.screens[self.screen_mapping[0]].shape
             def valid_screen_fn(idx):
                 return self.screens[self.screen_mapping[idx]]

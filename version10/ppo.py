@@ -24,26 +24,26 @@ except ImportError:
 class MiniGridCNNActorCritic(nn.Module):
     """
     CNN architecture replicating SB3's MiniGridCNN with adjusted conv strides.
-    The architecture uses:
-      - Conv1: kernel_size=(3,3), strides=(2,2)
-      - Conv2: kernel_size=(3,3), strides=(1,1)
-      - Conv3: kernel_size=(3,3), strides=(2,2)
-    so that for an input of shape (84,84, 3*num_frames), the flattened output is 21*21*64 = 28224.
+    For an input of shape (84,84, 3*num_frames), the layers are:
+      - Conv1: kernel_size=(3,3), strides=(2,2)   -> output: 42×42×32
+      - Conv2: kernel_size=(3,3), strides=(1,1)   -> output: 42×42×64
+      - Conv3: kernel_size=(3,3), strides=(2,2)   -> output: 21×21×64
+    Flattening gives 21×21×64 = 28224.
     """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
         x = x.astype(jnp.float32)
-        # Conv1: downsample by factor 2.
+        # Conv1: Downsample: 84->42.
         x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # Conv2: no downsampling.
+        # Conv2: No spatial downsampling: remains 42.
         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # Conv3: downsample by factor 2.
+        # Conv3: Downsample: 42->21.
         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
