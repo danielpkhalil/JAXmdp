@@ -18,40 +18,41 @@ try:
 except ImportError:
     TabularEnv, TabularEnvParams = None, None
 
+
 # -----------------------------------------------------------------------------
 # Actor-Critic Networks
 # -----------------------------------------------------------------------------
 class MiniGridCNNActorCritic(nn.Module):
     """
-    CNN architecture replicating SB3's MiniGridCNN but with fixed downsampling.
-    For an input of shape (84,84, 3*num_frames) (e.g. (84,84,12) when stacking 4 frames),
+    CNN architecture replicating SB3's MiniGridCNN but with explicit downsampling.
+    For an input of shape (84,84, 3*num_frames) (e.g. (84,84,12) for 4 stacked frames),
     the layers are:
       - Conv1: kernel_size=(3,3), strides=(2,2)   -> output: (42,42,32)
       - Conv2: kernel_size=(3,3), strides=(1,1)   -> output: (42,42,64)
-      - MaxPool: window=(2,2), strides=(2,2)         -> output: (21,21,64)
+      - MaxPool: window_shape=(2,2), strides=(2,2)  -> output: (21,21,64)
       - Conv3: kernel_size=(3,3), strides=(1,1)   -> output: (21,21,64)
-    Flattening gives 21*21*64 = 28224.
+    Flattening gives 21×21×64 = 28224.
     """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
         x = x.astype(jnp.float32)
-        # Conv1: downsample by factor 2.
+        # Conv1: downsample spatially by factor 2.
         x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2),
                     padding="SAME", kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # Conv2: no spatial downsampling.
+        # Conv2: no downsampling.
         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1),
                     padding="SAME", kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # MaxPool: explicitly downsample spatially by factor 2.
-        x = nn.max_pool(x, window_shape=(2,2), strides=(2,2), padding="SAME")
-        # Conv3: further processing (no extra downsampling).
+        # MaxPool: explicitly downsample spatially.
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2), padding="SAME")
+        # Conv3: process features (no additional downsampling).
         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1),
                     padding="SAME", kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # Flatten and fully connected.
+        # Flatten the spatial dimensions.
         x = x.reshape((x.shape[0], -1))
         x = nn.Dense(512, kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
@@ -60,12 +61,13 @@ class MiniGridCNNActorCritic(nn.Module):
         value = nn.Dense(1, kernel_init=orthogonal(1.0))(x)
         return pi, jnp.squeeze(value, axis=-1)
 
+
 class MLPActorCritic(nn.Module):
     """
     Simple 2x64 MLP for non-image observations.
     """
     action_dim: int
-    activation: str = "tanh"  # or "relu"
+    activation: str = "tanh"
 
     @nn.compact
     def __call__(self, x):
@@ -80,6 +82,7 @@ class MLPActorCritic(nn.Module):
         value = nn.Dense(1, kernel_init=orthogonal(1.0))(x)
         return pi, jnp.squeeze(value, axis=-1)
 
+
 # -----------------------------------------------------------------------------
 # Transition NamedTuple
 # -----------------------------------------------------------------------------
@@ -92,14 +95,19 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
+
 # -----------------------------------------------------------------------------
 # Main make_train(config) => train(rng) function
 # -----------------------------------------------------------------------------
 def make_train(config):
     """
-    Returns a function `train(rng)` that initializes the environment and the policy network,
-    then runs a fully-jitted PPO loop for NUM_UPDATES.
-    Adapted to handle the `num_frames` parameter in TabularEnvParams.
+    Returns a function `train(rng)` that:
+      - Initializes the environment and the policy network.
+      - Runs a fully-jitted PPO loop for NUM_UPDATES.
+      - Returns a dict with the final runner state and collected metrics.
+
+    This function passes the `num_frames` parameter to the environment so that it
+    returns stacked observations.
     """
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
@@ -215,7 +223,7 @@ def make_train(config):
                         adv_norm = (adv_ - adv_.mean()) / (adv_.std() + 1e-8)
                         pg_loss_1 = ratio * adv_norm
                         pg_loss_2 = jnp.clip(ratio, 1.0 - config["CLIP_EPS"],
-                                               1.0 + config["CLIP_EPS"]) * adv_norm
+                                             1.0 + config["CLIP_EPS"]) * adv_norm
                         policy_loss = -jnp.mean(jnp.minimum(pg_loss_1, pg_loss_2))
                         entropy = jnp.mean(pi.entropy())
                         loss = policy_loss + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
@@ -233,6 +241,7 @@ def make_train(config):
 
                 def flatten(x):
                     return x.reshape((batch_size,) + x.shape[2:])
+
                 traj_flat = jax.tree_util.tree_map(flatten, traj_b)
                 adv_flat = adv_b.reshape((batch_size,))
                 ret_flat = ret_b.reshape((batch_size,))
@@ -241,6 +250,7 @@ def make_train(config):
                     mbsize = batch_size // config["NUM_MINIBATCHES"]
                     x_ = jnp.take(x, perm, axis=0)
                     return x_.reshape((config["NUM_MINIBATCHES"], mbsize) + x_.shape[1:])
+
                 traj_mb = jax.tree_util.tree_map(minibatchify, traj_flat)
                 adv_mb = minibatchify(adv_flat)
                 ret_mb = minibatchify(ret_flat)
@@ -272,7 +282,9 @@ def make_train(config):
         runner_state = (train_state, env_state, obsv, rng, jnp.array(0))
         runner_state, metrics = jax.lax.scan(_update_step, runner_state, jnp.arange(config["NUM_UPDATES"]))
         return {"runner_state": runner_state, "metrics": metrics}
+
     return train
+
 
 # -----------------------------------------------------------------------------
 # Script Entry Point with wandb Logging
