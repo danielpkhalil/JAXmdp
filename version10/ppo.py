@@ -23,30 +23,35 @@ except ImportError:
 # -----------------------------------------------------------------------------
 class MiniGridCNNActorCritic(nn.Module):
     """
-    CNN architecture replicating SB3's MiniGridCNN with adjusted conv strides.
-    For an input of shape (84,84, 3*num_frames), the layers are:
-      - Conv1: kernel_size=(3,3), strides=(2,2)   -> output: 42×42×32
-      - Conv2: kernel_size=(3,3), strides=(1,1)   -> output: 42×42×64
-      - Conv3: kernel_size=(3,3), strides=(2,2)   -> output: 21×21×64
-    Flattening gives 21×21×64 = 28224.
+    CNN architecture replicating SB3's MiniGridCNN but with fixed downsampling.
+    For an input of shape (84,84, 3*num_frames) (e.g. (84,84,12) when stacking 4 frames),
+    the layers are:
+      - Conv1: kernel_size=(3,3), strides=(2,2)   -> output: (42,42,32)
+      - Conv2: kernel_size=(3,3), strides=(1,1)   -> output: (42,42,64)
+      - MaxPool: window=(2,2), strides=(2,2)         -> output: (21,21,64)
+      - Conv3: kernel_size=(3,3), strides=(1,1)   -> output: (21,21,64)
+    Flattening gives 21*21*64 = 28224.
     """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
         x = x.astype(jnp.float32)
-        # Conv1: Downsample: 84->42.
-        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
-                    kernel_init=orthogonal(np.sqrt(2)))(x)
+        # Conv1: downsample by factor 2.
+        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2),
+                    padding="SAME", kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # Conv2: No spatial downsampling: remains 42.
-        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME",
-                    kernel_init=orthogonal(np.sqrt(2)))(x)
+        # Conv2: no spatial downsampling.
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1),
+                    padding="SAME", kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        # Conv3: Downsample: 42->21.
-        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
-                    kernel_init=orthogonal(np.sqrt(2)))(x)
+        # MaxPool: explicitly downsample spatially by factor 2.
+        x = nn.max_pool(x, window_shape=(2,2), strides=(2,2), padding="SAME")
+        # Conv3: further processing (no extra downsampling).
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1),
+                    padding="SAME", kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
+        # Flatten and fully connected.
         x = x.reshape((x.shape[0], -1))
         x = nn.Dense(512, kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
@@ -60,7 +65,7 @@ class MLPActorCritic(nn.Module):
     Simple 2x64 MLP for non-image observations.
     """
     action_dim: int
-    activation: str = "tanh"
+    activation: str = "tanh"  # or "relu"
 
     @nn.compact
     def __call__(self, x):
@@ -209,7 +214,8 @@ def make_train(config):
                         ratio = jnp.exp(logp - t.log_prob)
                         adv_norm = (adv_ - adv_.mean()) / (adv_.std() + 1e-8)
                         pg_loss_1 = ratio * adv_norm
-                        pg_loss_2 = jnp.clip(ratio, 1.0 - config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * adv_norm
+                        pg_loss_2 = jnp.clip(ratio, 1.0 - config["CLIP_EPS"],
+                                               1.0 + config["CLIP_EPS"]) * adv_norm
                         policy_loss = -jnp.mean(jnp.minimum(pg_loss_1, pg_loss_2))
                         entropy = jnp.mean(pi.entropy())
                         loss = policy_loss + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
