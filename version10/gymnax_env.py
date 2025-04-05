@@ -165,15 +165,13 @@ class TabularEnv(environment.Environment):
             )
             next_obs_single = self._get_single_frame_obs(next_state, params)
             if params.use_screen_observations and self.screens is not None and params.num_frames > 1:
-                num_channels = self.screens.shape[-1]  # e.g. 3
+                num_channels = self.screens.shape[-1]
                 expected_channels = num_channels * params.num_frames
                 old_buffer = next_state.frame_buffer
                 def init_buffer_fn(_):
                     return jnp.concatenate([next_obs_single] * params.num_frames, axis=-1)
                 def update_buffer_fn(buf):
-                    # Drop exactly one frame (the oldest) and append the new frame.
                     new_buf = jnp.concatenate([buf[..., num_channels:], next_obs_single], axis=-1)
-                    # Check that new_buf has the expected shape; if not, reinitialize.
                     return jax.lax.cond(
                         new_buf.shape[-1] == expected_channels,
                         lambda x: x,
@@ -221,7 +219,7 @@ class TabularEnv(environment.Environment):
         params: TabularEnvParams
     ) -> chex.Array:
         if params.use_screen_observations and self.screens is not None:
-            # Determine a target shape from a known valid screen.
+            # Determine target shape from a valid screen.
             target_shape = self.screens[self.screen_mapping[0]].shape
             def valid_screen_fn(idx):
                 return self.screens[self.screen_mapping[idx]]

@@ -23,24 +23,31 @@ except ImportError:
 # -----------------------------------------------------------------------------
 class MiniGridCNNActorCritic(nn.Module):
     """
-    CNN architecture replicating SB3's MiniGridCNN (3xConv => Flatten => 512 => policy/value).
+    CNN architecture replicating SB3's MiniGridCNN with adjusted conv strides.
+    The architecture uses:
+      - Conv1: kernel_size=(3,3), strides=(2,2)
+      - Conv2: kernel_size=(3,3), strides=(1,1)
+      - Conv3: kernel_size=(3,3), strides=(2,2)
+    so that for an input of shape (84,84, 3*num_frames), the flattened output is 21*21*64 = 28224.
     """
     action_dim: int
 
     @nn.compact
     def __call__(self, x):
-        # x is (batch, H, W, C) in uint8, cast to float32
         x = x.astype(jnp.float32)
+        # Conv1: downsample by factor 2.
         x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
-                    kernel_init=orthogonal(np.sqrt(2)))(x)
-        x = nn.relu(x)
+        # Conv2: no downsampling.
         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), padding="SAME",
                     kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
-        x = x.reshape((x.shape[0], -1))  # Flatten
+        # Conv3: downsample by factor 2.
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
+                    kernel_init=orthogonal(np.sqrt(2)))(x)
+        x = nn.relu(x)
+        x = x.reshape((x.shape[0], -1))
         x = nn.Dense(512, kernel_init=orthogonal(np.sqrt(2)))(x)
         x = nn.relu(x)
         logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01))(x)
@@ -53,7 +60,7 @@ class MLPActorCritic(nn.Module):
     Simple 2x64 MLP for non-image observations.
     """
     action_dim: int
-    activation: str = "tanh"  # or "relu"
+    activation: str = "tanh"
 
     @nn.compact
     def __call__(self, x):
@@ -92,7 +99,6 @@ def make_train(config):
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
 
-    # Create environment
     if config["ENV_NAME"] == "TabularMDP" and TabularEnv is not None:
         env = TabularEnv(config["ENV_FILE"])
         env_params = env.default_params().replace(
@@ -102,7 +108,6 @@ def make_train(config):
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
-    # Wrap environment
     env = LogWrapper(env)
 
     def linear_schedule(count):
@@ -113,7 +118,6 @@ def make_train(config):
         obs_shape = env.observation_space(env_params).shape
         action_dim = env.action_space(env_params).n
 
-        # Use CNN if observation is image-like
         if len(obs_shape) == 3:
             network = MiniGridCNNActorCritic(action_dim=action_dim)
             dummy_obs = jnp.zeros((1,) + obs_shape, dtype=jnp.uint8)
@@ -223,7 +227,6 @@ def make_train(config):
 
                 def flatten(x):
                     return x.reshape((batch_size,) + x.shape[2:])
-
                 traj_flat = jax.tree_util.tree_map(flatten, traj_b)
                 adv_flat = adv_b.reshape((batch_size,))
                 ret_flat = ret_b.reshape((batch_size,))
@@ -232,7 +235,6 @@ def make_train(config):
                     mbsize = batch_size // config["NUM_MINIBATCHES"]
                     x_ = jnp.take(x, perm, axis=0)
                     return x_.reshape((config["NUM_MINIBATCHES"], mbsize) + x_.shape[1:])
-
                 traj_mb = jax.tree_util.tree_map(minibatchify, traj_flat)
                 adv_mb = minibatchify(adv_flat)
                 ret_mb = minibatchify(ret_flat)
@@ -262,9 +264,7 @@ def make_train(config):
             return new_runner_state, metrics
 
         runner_state = (train_state, env_state, obsv, rng, jnp.array(0))
-        runner_state, metrics = jax.lax.scan(
-            _update_step, runner_state, jnp.arange(config["NUM_UPDATES"])
-        )
+        runner_state, metrics = jax.lax.scan(_update_step, runner_state, jnp.arange(config["NUM_UPDATES"]))
         return {"runner_state": runner_state, "metrics": metrics}
     return train
 
@@ -294,7 +294,6 @@ if __name__ == "__main__":
         "ENV_NAME": "TabularMDP",
         "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps_with_exploration_policy/breakout_10_fs30/consolidated_framestack.npz",
         "REWARD_SCALE": 1.0,
-        # NEW KEY: How many frames to stack.
         "NUM_FRAMES": 4,
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
