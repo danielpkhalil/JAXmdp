@@ -285,7 +285,7 @@ def main():
         "REWARD_SCALE": 1.0,
         "SEED": 0,
         "NUM_SEEDS": 5,
-        "WANDB_MODE": "offline",  # change to "online" to log to wandb
+        "WANDB_MODE": "online",  # change to "online" to log to wandb
     }
 
     wandb.init(
