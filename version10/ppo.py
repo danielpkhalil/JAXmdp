@@ -15,7 +15,7 @@ from gymnax.wrappers.purerl import LogWrapper
 # Import our custom framestacking Env & Params
 # NOTE: If you renamed your env file, update the import accordingly
 try:
-    from gymnax_env_framestack import TabularEnv, TabularEnvParams
+    from gymnax_env import TabularEnv, TabularEnvParams
 except ImportError:
     # Fallback or handle missing import
     TabularEnv, TabularEnvParams = None, None
