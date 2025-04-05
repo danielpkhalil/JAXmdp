@@ -285,12 +285,12 @@ def main():
         "REWARD_SCALE": 1.0,
         "SEED": 0,
         "NUM_SEEDS": 5,
-        "WANDB_MODE": "disabled",  # change to "online" to log to wandb
+        "WANDB_MODE": "offline",  # change to "online" to log to wandb
     }
 
     wandb.init(
         entity="",
-        project="",
+        project="DQN",
         tags=["DQN", config["ENV_NAME"].upper(), f"jax_{jax.__version__}"],
         name=f'purejaxrl_dqn_{config["ENV_NAME"]}',
         config=config,
@@ -315,6 +315,10 @@ def main():
     plt.title("Reward Curves over Timesteps for Each Seed")
     plt.legend()
     plt.show()
+
+    # Log the figure to wandb
+    wandb.log({"reward_curves_over_timesteps": wandb.Image(plt)})
+    plt.close()
 
 if __name__ == "__main__":
     main()
