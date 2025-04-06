@@ -1,6 +1,7 @@
 import os
 import jax
 import jax.numpy as jnp
+import time
 
 import chex
 import flax
@@ -297,10 +298,23 @@ def main():
         mode=config["WANDB_MODE"],
     )
 
+    # NEW: Single-seed training timing
+    single_seed_rng = jax.random.PRNGKey(config["SEED"])
+    t0 = time.time()  # NEW: start timer for single-seed training
+    train_jit = jax.jit(make_train(config))  # NEW: jit single-seed training function
+    out_single = jax.block_until_ready(train_jit(single_seed_rng))  # NEW: run single-seed training
+    elapsed_single = time.time() - t0  # NEW: calculate elapsed time for single-seed
+    print(f"Single-seed training took {elapsed_single:.2f} seconds.")  # NEW: print single-seed timing
+
+    # --------------------------------------------------------------------------
+    # Multiple seeds training timing
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config)))
+    train_vjit = jax.jit(jax.vmap(make_train(config)))  # existing line, using vmap for multi-seed training
+    t1 = time.time()  # NEW: start timer for multi-seed training
     outs = jax.block_until_ready(train_vjit(rngs))
+    elapsed_multi = time.time() - t1  # NEW: calculate elapsed time for multi-seed training
+    print(f"Multi-seed training (across {config['NUM_SEEDS']} seeds) took {elapsed_multi:.2f} seconds.")  # NEW: print multi-seed timing
 
     returns = jax.device_get(outs['metrics']['returns'])
     timesteps = jax.device_get(outs['metrics']['timesteps'])
