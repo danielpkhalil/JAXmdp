@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import optax
+import wandb  # Added for live logging
 
 from flax.linen.initializers import orthogonal, constant
 from flax.training.train_state import TrainState
@@ -102,7 +103,12 @@ def make_train(config):
       - Initializes the environment and the policy network
       - Runs a fully-jitted PPO loop for `NUM_UPDATES`
       - Returns a dict with final runner state + collected metrics
+
+    NOTE: Some config keys (EVAL_FREQUENCY, TRAIN_MEDIAN_WINDOW, OPTIMAL_REWARD, etc.)
+    are NOT used inside the fully-jitted loop. If you need on-the-fly eval or
+    early-stopping, do that outside the big jit.
     """
+
     # Calculate how many updates from config:
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
@@ -125,7 +131,6 @@ def make_train(config):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
         return config["LR"] * frac
 
-    # The train(rng) function
     def train(rng):
         # Decide on CNN vs MLP
         obs_shape = env.observation_space(env_params).shape
@@ -170,9 +175,16 @@ def make_train(config):
         reset_rngs = jax.random.split(reset_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
 
-        # -----------------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Live logging callback: logs mean episode return to wandb
+        def live_logging_callback(metrics, update_idx):
+            # Compute mean return from the info dict (assumes key "returned_episode_returns" is present)
+            mean_ret = np.mean(np.array(metrics["returned_episode_returns"]))
+            print(f"Update {int(update_idx)}: Mean Reward {mean_ret}")
+            wandb.log({"update": int(update_idx), "live_mean_return": float(mean_ret)})
+
+        # ---------------------------------------------------------------------
         # One update step (rollout + PPO)
-        # -----------------------------------------------------------------------------
         def _update_step(runner_state, update_idx):
             train_state, env_state, last_obs, rng, global_step_count = runner_state
 
@@ -209,6 +221,7 @@ def make_train(config):
 
             # (B) GAE advantage
             _, last_val = network.apply(train_state.params, last_obs)
+
             def _gae_scan(carry, t: Transition):
                 gae, next_val = carry
                 delta = t.reward + config["GAMMA"] * next_val * (1 - t.done) - t.value
@@ -309,18 +322,20 @@ def make_train(config):
             train_state = update_state[0]
             rng = update_state[-1]
 
-            # Store metrics from the rollout
+            # Store metrics from the rollout (assumes 'info' dict contains "returned_episode_returns")
             metrics = traj_batch.info
-
-            # Optionally log online metrics if wandb is online
-            if config.get("WANDB_MODE", "offline") == "online":
-                def wandb_log_callback(m):
-                    wandb.log(m)
-                jax.debug.callback(wandb_log_callback, metrics)
 
             # Increase global step count
             global_step_count += (config["NUM_ENVS"] * config["NUM_STEPS"])
+
             new_runner_state = (train_state, env_state, last_obs, rng, global_step_count)
+
+            # -----------------------------------------------------------------
+            # Live logging: use a jax.debug.callback to trigger our Python callback.
+            # (We pack metrics and update_idx together.)
+            jax.debug.callback(lambda t: live_logging_callback(t[0], t[1]), (metrics, update_idx))
+            # -----------------------------------------------------------------
+
             return new_runner_state, metrics
 
         # Scan over all updates
@@ -343,7 +358,7 @@ def make_train(config):
 if __name__ == "__main__":
     import time
     import matplotlib.pyplot as plt
-    import wandb  # pip install wandb
+    import wandb  # make sure wandb is imported
 
     config = {
         "SEED": 1,
@@ -369,13 +384,10 @@ if __name__ == "__main__":
         "TRAIN_MEDIAN_WINDOW": 20,
         "OPTIMAL_REWARD": 5.0,
         "ANNEAL_LR": True,   # Use linear LR schedule
-
-        # Set WANDB_MODE to "online" to log during training, "offline" to log only final results
-        "WANDB_MODE": "online",
     }
 
     # 1) Initialize wandb
-    wandb.init(project="parallel_seed_full_jit", config=config, mode=config["WANDB_MODE"])
+    wandb.init(project="parallel_seed_full_jit", config=config)
 
     # 2) Build the train(rng) function
     train_fn = make_train(config)
@@ -393,16 +405,16 @@ if __name__ == "__main__":
     returned_ep_ret = out["metrics"]["returned_episode_returns"]
     mean_return_per_update = returned_ep_ret.mean(axis=(-1, -2))  # average over steps & envs
 
-    # 4) Plot single-seed training curve (line plot like the DQN plotting)
-    fig_single, ax_single = plt.subplots()
-    ax_single.plot(mean_return_per_update, label="Single Seed")
-    ax_single.set_xlabel("Update")
-    ax_single.set_ylabel("Mean Episode Return")
-    ax_single.set_title("Single-Seed PPO on TabularMDP (fully-jitted)")
-    ax_single.legend()
-    # Log the figure to wandb as an image
-    wandb.log({"training_returns_plot_single_seed": wandb.Image(fig_single)})
-    plt.close(fig_single)
+    # 4) Plot single-seed training curve
+    plt.figure()
+    plt.plot(mean_return_per_update, label="Single Seed")
+    plt.xlabel("Update")
+    plt.ylabel("Mean Episode Return")
+    plt.title("Single-Seed PPO on TabularMDP (fully-jitted)")
+    plt.legend()
+    # Log to wandb as an image
+    wandb.log({"training_returns_plot_single_seed": wandb.Image(plt)})
+    plt.close()
 
     # 5) Multi-seed example
     num_seeds = 4
@@ -416,17 +428,17 @@ if __name__ == "__main__":
     # outs["metrics"]["returned_episode_returns"] => shape (num_seeds, NUM_UPDATES, NUM_STEPS, NUM_ENVS)
     rets_all = outs["metrics"]["returned_episode_returns"]
 
-    fig_multi, ax_multi = plt.subplots()
+    plt.figure()
     for i in range(num_seeds):
         mean_ret_i = rets_all[i].mean(axis=(-1, -2))  # shape [NUM_UPDATES]
-        ax_multi.plot(mean_ret_i, label=f"seed {i}")
-    ax_multi.set_xlabel("Update")
-    ax_multi.set_ylabel("Mean Episode Return")
-    ax_multi.set_title("Multi-Seed PPO on TabularMDP")
-    ax_multi.legend()
+        plt.plot(mean_ret_i, label=f"seed {i}")
+    plt.xlabel("Update")
+    plt.ylabel("Mean Episode Return")
+    plt.title("Multi-Seed PPO on TabularMDP")
+    plt.legend()
     # Log multi-seed figure
-    wandb.log({"training_returns_plot_multi_seed": wandb.Image(fig_multi)})
-    plt.close(fig_multi)
+    wandb.log({"training_returns_plot_multi_seed": wandb.Image(plt)})
+    plt.close()
 
     # 6) Optionally log final results numeric
     wandb.log({
