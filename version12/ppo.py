@@ -18,6 +18,8 @@ try:
 except ImportError:
     TabularEnv, TabularEnvParams = None, None
 
+# Import host_callback to perform logging without tracer errors.
+from jax.experimental import host_callback as hcb
 
 # -----------------------------------------------------------------------------
 # Actor-Critic Networks
@@ -30,7 +32,7 @@ class MiniGridCNNActorCritic(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # x is (batch, H, W, C), cast to float32
+        # x is (batch, H, W, C); cast to float32
         x = x.astype(jnp.float32)
         # Conv layers
         x = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME",
@@ -58,7 +60,7 @@ class MiniGridCNNActorCritic(nn.Module):
 
 class MLPActorCritic(nn.Module):
     """
-    Simple 2x64 MLP for non-image observations
+    Simple 2x64 MLP for non-image observations.
     """
     action_dim: int
     activation: str = "tanh"  # or "relu"
@@ -99,11 +101,16 @@ class Transition(NamedTuple):
 def make_train(config):
     """
     Returns a function `train(rng)` that:
-      - Initializes the environment and the policy network
-      - Runs a fully-jitted PPO loop for `NUM_UPDATES`
-      - Returns a dict with final runner state + collected metrics
+      - Initializes the environment and the policy network.
+      - Runs a fully-jitted PPO loop for `NUM_UPDATES`.
+      - Returns a dict with final runner state + collected metrics.
+
+    NOTE: Some config keys (EVAL_FREQUENCY, TRAIN_MEDIAN_WINDOW, OPTIMAL_REWARD, etc.)
+    are NOT used inside the fully-jitted loop. For on-the-fly eval or early-stopping,
+    do that outside the big jit.
     """
-    # Calculate how many updates from config:
+
+    # Calculate the number of updates based on the config:
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
 
@@ -127,7 +134,7 @@ def make_train(config):
 
     # The train(rng) function
     def train(rng):
-        # Decide on CNN vs MLP
+        # Decide on using CNN vs. MLP based on observation shape.
         obs_shape = env.observation_space(env_params).shape
         action_dim = env.action_space(env_params).n
 
@@ -143,11 +150,11 @@ def make_train(config):
             network = MLPActorCritic(action_dim=action_dim, activation=config.get("ACTIVATION", "relu"))
             dummy_obs = jnp.zeros((1,) + obs_shape, dtype=jnp.float32)
 
-        # Initialize network params
+        # Initialize network parameters.
         rng, init_rng = jax.random.split(rng)
         network_params = network.init(init_rng, dummy_obs)
 
-        # Optimizer
+        # Setup optimizer.
         if config.get("ANNEAL_LR", False):
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -165,7 +172,7 @@ def make_train(config):
             tx=tx,
         )
 
-        # Reset env (vector of envs)
+        # Reset environment (vectorized over NUM_ENVS)
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rngs, env_params)
@@ -207,8 +214,9 @@ def make_train(config):
                 _env_step, carry_init, None, config["NUM_STEPS"]
             )
 
-            # (B) GAE advantage
+            # (B) Compute GAE advantage.
             _, last_val = network.apply(train_state.params, last_obs)
+
             def _gae_scan(carry, t: Transition):
                 gae, next_val = carry
                 delta = t.reward + config["GAMMA"] * next_val * (1 - t.done) - t.value
@@ -224,7 +232,7 @@ def make_train(config):
             )
             returns = advantages + traj_batch.value
 
-            # (C) PPO update
+            # (C) PPO update.
             def _update_epoch(update_state, _):
                 def _update_minibatch(ts, minibatch):
                     mb_traj, mb_adv, mb_ret = minibatch
@@ -233,7 +241,7 @@ def make_train(config):
                         pi, val = network.apply(params, t.obs)
                         logp = pi.log_prob(t.action)
 
-                        # Value clipping
+                        # Value clipping.
                         v_clipped = t.value + (val - t.value).clip(
                             -config["CLIP_EPS"], config["CLIP_EPS"]
                         )
@@ -241,7 +249,7 @@ def make_train(config):
                         v_loss_2 = (v_clipped - rt_) ** 2
                         value_loss = 0.5 * jnp.mean(jnp.maximum(v_loss_1, v_loss_2))
 
-                        # Policy clipping
+                        # Policy clipping.
                         ratio = jnp.exp(logp - t.log_prob)
                         adv_norm = (adv_ - adv_.mean()) / (adv_.std() + 1e-8)
                         pg_loss_1 = ratio * adv_norm
@@ -249,10 +257,10 @@ def make_train(config):
                                                1.0 + config["CLIP_EPS"]) * adv_norm
                         policy_loss = -jnp.mean(jnp.minimum(pg_loss_1, pg_loss_2))
 
-                        # Entropy
+                        # Entropy.
                         entropy = jnp.mean(pi.entropy())
 
-                        # Combine
+                        # Combined loss.
                         loss = (policy_loss
                                 + config["VF_COEF"] * value_loss
                                 - config["ENT_COEF"] * entropy)
@@ -265,7 +273,7 @@ def make_train(config):
 
                 ts, traj_b, adv_b, ret_b, k_ = update_state
 
-                # Shuffle entire batch
+                # Shuffle entire batch.
                 k_, pk = jax.random.split(k_)
                 batch_size = config["NUM_STEPS"] * config["NUM_ENVS"]
                 perm = jax.random.permutation(pk, batch_size)
@@ -296,11 +304,10 @@ def make_train(config):
                     ts, _ = _update_minibatch(ts, batch_i)
                     return ts, None
 
-                # Repeat for UPDATE_EPOCHS
+                # Repeat for UPDATE_EPOCHS.
                 for _ in range(config["UPDATE_EPOCHS"]):
                     indices = jnp.arange(config["NUM_MINIBATCHES"])
                     ts, _ = jax.lax.scan(scan_minibatch, ts, indices)
-
                 new_state = (ts, traj_b, adv_b, ret_b, k_)
                 return new_state, None
 
@@ -309,21 +316,26 @@ def make_train(config):
             train_state = update_state[0]
             rng = update_state[-1]
 
-            # Store metrics from the rollout
+            # Store metrics from the rollout.
             metrics = traj_batch.info
 
-            # Optionally log online metrics if wandb is online
-            if config.get("WANDB_MODE", "offline") == "online":
-                def wandb_log_callback(m):
-                    wandb.log(m)
-                jax.debug.callback(wandb_log_callback, metrics)
-
-            # Increase global step count
+            # Increase global step count.
             global_step_count += (config["NUM_ENVS"] * config["NUM_STEPS"])
+
+            # If using online wandb logging, log metrics periodically.
+            if config.get("WANDB_MODE", "disabled") == "online":
+                def log_callback(arg):
+                    idx, met = arg
+                    idx = int(idx)  # ensure idx is a Python int
+                    if idx % 10 == 0:
+                        import wandb
+                        wandb.log(met)
+                hcb.call(log_callback, (update_idx, metrics), result=None)
+
             new_runner_state = (train_state, env_state, last_obs, rng, global_step_count)
             return new_runner_state, metrics
 
-        # Scan over all updates
+        # Scan over all updates.
         runner_state = (train_state, env_state, obsv, rng, jnp.array(0))
         runner_state, metrics = jax.lax.scan(
             _update_step, runner_state, jnp.arange(config["NUM_UPDATES"])
@@ -363,48 +375,41 @@ if __name__ == "__main__":
         "ENV_NAME": "TabularMDP",
         "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/fruitbot_easy_l0_40_fs8/consolidated.npz",  # used if ENV_NAME == "TabularMDP"
         "REWARD_SCALE": 1.0,
-
-        # Not used internally for a fully-jitted run:
-        "EVAL_FREQUENCY": 1000,
-        "TRAIN_MEDIAN_WINDOW": 20,
-        "OPTIMAL_REWARD": 5.0,
         "ANNEAL_LR": True,   # Use linear LR schedule
-
-        # Set WANDB_MODE to "online" to log during training, "offline" to log only final results
         "WANDB_MODE": "online",
     }
 
-    # 1) Initialize wandb
+    # 1) Initialize wandb with the provided mode.
     wandb.init(project="parallel_seed_full_jit", config=config, mode=config["WANDB_MODE"])
 
-    # 2) Build the train(rng) function
+    # 2) Build the train(rng) function.
     train_fn = make_train(config)
     train_jit = jax.jit(train_fn)
 
-    # 3) Single-seed training
+    # 3) Single-seed training.
     rng = jax.random.PRNGKey(config["SEED"])
     t0 = time.time()
     out = jax.block_until_ready(train_jit(rng))
     elapsed_single = time.time() - t0
     print(f"Single-seed training took {elapsed_single:.2f} seconds.")
 
-    # Extract metrics
+    # Extract metrics.
     # returned_episode_returns shape => [NUM_UPDATES, NUM_STEPS, NUM_ENVS]
     returned_ep_ret = out["metrics"]["returned_episode_returns"]
     mean_return_per_update = returned_ep_ret.mean(axis=(-1, -2))  # average over steps & envs
 
-    # 4) Plot single-seed training curve (line plot like the DQN plotting)
-    fig_single, ax_single = plt.subplots()
-    ax_single.plot(mean_return_per_update, label="Single Seed")
-    ax_single.set_xlabel("Update")
-    ax_single.set_ylabel("Mean Episode Return")
-    ax_single.set_title("Single-Seed PPO on TabularMDP (fully-jitted)")
-    ax_single.legend()
-    # Log the figure to wandb as an image
-    wandb.log({"training_returns_plot_single_seed": wandb.Image(fig_single)})
-    plt.close(fig_single)
+    # 4) Plot single-seed training curve.
+    plt.figure()
+    plt.plot(mean_return_per_update, label="Single Seed")
+    plt.xlabel("Update")
+    plt.ylabel("Mean Episode Return")
+    plt.title("Single-Seed PPO on TabularMDP (fully-jitted)")
+    plt.legend()
+    # Log to wandb as an image.
+    wandb.log({"training_returns_plot_single_seed": wandb.Image(plt)})
+    plt.close()
 
-    # 5) Multi-seed example
+    # 5) Multi-seed example.
     num_seeds = 4
     rng_seeds = jax.random.split(jax.random.PRNGKey(999), num_seeds)
     batched_train = jax.jit(jax.vmap(train_fn))
@@ -416,24 +421,24 @@ if __name__ == "__main__":
     # outs["metrics"]["returned_episode_returns"] => shape (num_seeds, NUM_UPDATES, NUM_STEPS, NUM_ENVS)
     rets_all = outs["metrics"]["returned_episode_returns"]
 
-    fig_multi, ax_multi = plt.subplots()
+    plt.figure()
     for i in range(num_seeds):
         mean_ret_i = rets_all[i].mean(axis=(-1, -2))  # shape [NUM_UPDATES]
-        ax_multi.plot(mean_ret_i, label=f"seed {i}")
-    ax_multi.set_xlabel("Update")
-    ax_multi.set_ylabel("Mean Episode Return")
-    ax_multi.set_title("Multi-Seed PPO on TabularMDP")
-    ax_multi.legend()
-    # Log multi-seed figure
-    wandb.log({"training_returns_plot_multi_seed": wandb.Image(fig_multi)})
-    plt.close(fig_multi)
+        plt.plot(mean_ret_i, label=f"seed {i}")
+    plt.xlabel("Update")
+    plt.ylabel("Mean Episode Return")
+    plt.title("Multi-Seed PPO on TabularMDP")
+    plt.legend()
+    # Log multi-seed figure.
+    wandb.log({"training_returns_plot_multi_seed": wandb.Image(plt)})
+    plt.close()
 
-    # 6) Optionally log final results numeric
+    # 6) Optionally log final numeric results.
     wandb.log({
         "final_single_seed_return": float(mean_return_per_update[-1]),
         "time_single_seed": elapsed_single,
         "time_multi_seed_for_4": elapsed_multi,
     })
 
-    # 7) Finish wandb run
+    # 7) Finish wandb run.
     wandb.finish()
