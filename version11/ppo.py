@@ -361,7 +361,7 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
-        "ENV_NAME": "CartPole-v1",  # or "MiniGrid-Empty-5x5-v0", etc.
+        "ENV_NAME": "TabularMDP",
         "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/fruitbot_easy_l0_40_fs8/consolidated.npz",  # used if ENV_NAME == "TabularMDP"
         "REWARD_SCALE": 1.0,
 
