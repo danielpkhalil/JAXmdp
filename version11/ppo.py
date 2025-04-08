@@ -403,7 +403,7 @@ if __name__ == "__main__":
     plt.close()
 
     # 5) Multi-seed example
-    num_seeds = 4
+    num_seeds = 10
     rng_seeds = jax.random.split(jax.random.PRNGKey(999), num_seeds)
     batched_train = jax.jit(jax.vmap(train_fn))
     t0 = time.time()
