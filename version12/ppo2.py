@@ -295,7 +295,7 @@ if __name__ == "__main__":
         "DEBUG": True,
     }
     # Initialize wandb
-    wandb.init(project=config["PROJECT_NAME"], config=config)
+    wandb.init(project="parallel_seed_full_jit", config=config)
 
     # Build the train function
     train_fn = make_train(config)
