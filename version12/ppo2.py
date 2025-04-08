@@ -290,7 +290,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
         "ENV_NAME": "TabularMDP",  # Custom environment name
-        "ENV_FILE": "test.npz",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps_hard/sokoban_junior_08/mdp.npz",
         "ANNEAL_LR": True,
         "DEBUG": True,
     }
