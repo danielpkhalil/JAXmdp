@@ -323,7 +323,7 @@ if __name__ == "__main__":
     plt.close()
 
     # Multi-seed training
-    num_seeds = 16
+    num_seeds = 64
     rng_seeds = jax.random.split(jax.random.PRNGKey(config["SEED"]), num_seeds)
     batched_train = jax.jit(jax.vmap(train_fn))
     t0 = time.time()
