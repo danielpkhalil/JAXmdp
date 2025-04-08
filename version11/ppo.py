@@ -362,7 +362,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps_hard/hanoi_5/consolidated.npz",  # used if ENV_NAME == "TabularMDP"
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps_hard/hanoi_4/consolidated.npz",  # used if ENV_NAME == "TabularMDP"
         "REWARD_SCALE": 1.0,
 
         # Not used internally for a fully-jitted run:
