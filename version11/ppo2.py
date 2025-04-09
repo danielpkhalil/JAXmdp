@@ -296,7 +296,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/fruitbot_easy_l0_40_fs8/consolidated.npz",
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-KeyCorridorS3R3-v0/consolidated.npz",
         "REWARD_SCALE": 1.0,
         "EVAL_FREQUENCY": 1000,
         "TRAIN_MEDIAN_WINDOW": 20,
@@ -305,7 +305,7 @@ if __name__ == "__main__":
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
     config["NUM_UPDATES"] = int(config["TOTAL_TIMESTEPS"] // steps_per_update)
     wandb.init(project="parallel_seed_hybrid_jit", config=config)
-    num_seeds = 4
+    num_seeds = 16
     base_rng = jax.random.PRNGKey(config["SEED"])
     rng_seeds = jax.random.split(base_rng, num_seeds)
     results = run_ppo_training_multi_seed(rng_seeds, config)
