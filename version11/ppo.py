@@ -362,7 +362,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu",
         "ENV_NAME": "TabularMDP",
-        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps_hard/sokoban_junior_08/mdp.npz",  # used if ENV_NAME == "TabularMDP"
+        "ENV_FILE": "/nas/ucb/cassidy/rl-theory/data/mdps/MiniGrid-KeyCorridorS3R3-v0/consolidated.npz",  # used if ENV_NAME == "TabularMDP"
         "REWARD_SCALE": 1.0,
 
         # Not used internally for a fully-jitted run:
@@ -403,7 +403,7 @@ if __name__ == "__main__":
     plt.close()
 
     # 5) Multi-seed example
-    num_seeds = 16
+    num_seeds = 32
     rng_seeds = jax.random.split(jax.random.PRNGKey(999), num_seeds)
     batched_train = jax.jit(jax.vmap(train_fn))
     t0 = time.time()
