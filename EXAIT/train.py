@@ -9,7 +9,7 @@ DEFAULT_PPO_CONFIG = {
     "LR": 2.5e-4,
     "NUM_ENVS": 8,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 1e4,
+    "TOTAL_TIMESTEPS": 1e7,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 4,
     "GAMMA": 0.99,
