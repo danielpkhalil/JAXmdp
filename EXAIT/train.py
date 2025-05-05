@@ -21,10 +21,10 @@ DEFAULT_PPO_CONFIG = {
     "ACTIVATION": "relu",
     "ENV_NAME": "TabularMDP",
     "ENV_FILE": "test.npz",
-    "REWARD_SCALE": 1.0/25,
+    "REWARD_SCALE": 1.0/100,
     "EVAL_FREQUENCY": 1000,
     "TRAIN_MEDIAN_WINDOW": 20,
-    "OPTIMAL_REWARD": 17.0,
+    "OPTIMAL_REWARD": 1.0,
 }
 
 DEFAULT_DQN_CONFIG = {
@@ -44,14 +44,14 @@ DEFAULT_DQN_CONFIG = {
     "TAU": 1.0,
     "ENV_NAME": "TabularMDP",
     "ENV_FILE": "test.npz",
-    "REWARD_SCALE": 1.0,
+    "REWARD_SCALE": 1.0/100,
     "SEED": 0,
     "NUM_SEEDS": 1,
     "WANDB_MODE": "online",
     # New eval/stop params
     "EVAL_FREQUENCY": 1000,
     "TRAIN_MEDIAN_WINDOW": 20,
-    "OPTIMAL_REWARD": 20.0,
+    "OPTIMAL_REWARD": 1.0,
 }
 
 
