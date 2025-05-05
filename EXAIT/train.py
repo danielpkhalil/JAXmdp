@@ -21,10 +21,10 @@ DEFAULT_PPO_CONFIG = {
     "ACTIVATION": "relu",
     "ENV_NAME": "TabularMDP",
     "ENV_FILE": "test.npz",
-    "REWARD_SCALE": 1.0,
+    "REWARD_SCALE": 1.0/25,
     "EVAL_FREQUENCY": 1000,
     "TRAIN_MEDIAN_WINDOW": 20,
-    "OPTIMAL_REWARD": 5.0,
+    "OPTIMAL_REWARD": 17.0,
 }
 
 DEFAULT_DQN_CONFIG = {
