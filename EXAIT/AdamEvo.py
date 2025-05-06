@@ -105,12 +105,12 @@ print("➡️  Baseline test accuracy:", accuracy(baseline, test_loader))
 # ============================================================
 # 🧬 Cell 2 — Hybrid Adam + CMA‑ES
 # ============================================================
-μ = 4  # parents
-λ = 8  # offspring
-k = 20  # Adam steps inside each generation
-G = 3  # generations
+μ = 5  # parents
+λ = 10  # offspring
+k = 200  # Adam steps inside each generation
+G = 5  # generations
 LR_INNER = 1e-3
-SIGMA0 = 0.05  # initial CMA step‑size
+SIGMA0 = 0.01  # initial CMA step‑size
 
 # --- prepare a template network + flattening helpers --------
 template_net = SmallCNN().to(device)
